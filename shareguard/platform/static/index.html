@@ -716,10 +716,14 @@
       const body = new FormData();
       body.append("image", currentFile);
       try {
-        const response = await fetch("/api/analyze", { method: "POST", body });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "分析失败");
-        setAnalysisPayload(payload);
+        if (shouldUseStaticDemo()) {
+          setAnalysisPayload(await buildStaticDemoPayload());
+        } else {
+          const response = await fetch("/api/analyze", { method: "POST", body });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "分析失败");
+          setAnalysisPayload(payload);
+        }
       } catch (err) {
         try {
           const fallbackPayload = await buildStaticDemoPayload();
@@ -730,6 +734,11 @@
       } finally {
         button.disabled = false;
       }
+    }
+
+    function shouldUseStaticDemo() {
+      if (window.location.hostname.endsWith("github.io")) return true;
+      return window.location.port && window.location.port !== "7860";
     }
 
     function setAnalysisPayload(payload) {

@@ -155,6 +155,7 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn("GitHub Pages 静态演示", html)
         self.assertIn("static-demo", html)
         self.assertIn("function buildStaticDemoPayload", html)
+        self.assertIn("function shouldUseStaticDemo", html)
         self.assertIn("function makeStaticPropagationViews", html)
         self.assertIn("function buildStaticReport", html)
 
