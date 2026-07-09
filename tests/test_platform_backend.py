@@ -147,6 +147,25 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn("function loadSampleCase", html)
         self.assertIn("function renderCaseContext", html)
 
+    def test_static_page_supports_github_pages_demo_fallback(self):
+        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("GitHub Pages 静态演示", html)
+        self.assertIn("static-demo", html)
+        self.assertIn("function buildStaticDemoPayload", html)
+        self.assertIn("function makeStaticPropagationViews", html)
+        self.assertIn("function buildStaticReport", html)
+
+    def test_github_pages_workflow_deploys_static_platform(self):
+        workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pages.yml"
+
+        self.assertTrue(workflow.exists())
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("actions/deploy-pages", content)
+        self.assertIn("shareguard/platform/static", content)
+
     def test_parse_multipart_image_extracts_upload_field(self):
         boundary = "----shareguard-test-boundary"
         image_bytes = png_bytes(size=(5, 4))

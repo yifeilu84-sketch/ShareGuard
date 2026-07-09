@@ -719,15 +719,28 @@
         const response = await fetch("/api/analyze", { method: "POST", body });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "分析失败");
-        latestPayload = payload;
-        engineLabel.textContent = payload.backend === "mock" ? "Demo Engine" : "Fusion Engine";
-        renderViews(payload);
-        renderReport(payload);
+        setAnalysisPayload(payload);
       } catch (err) {
-        reportBody.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+        try {
+          const fallbackPayload = await buildStaticDemoPayload();
+          setAnalysisPayload(fallbackPayload);
+        } catch (fallbackErr) {
+          reportBody.innerHTML = `<div class="error">${escapeHtml(err.message || fallbackErr.message)}</div>`;
+        }
       } finally {
         button.disabled = false;
       }
+    }
+
+    function setAnalysisPayload(payload) {
+      latestPayload = payload;
+      engineLabel.textContent = payload.backend === "mock"
+        ? "Demo Engine"
+        : payload.backend === "static-demo"
+          ? "GitHub Pages 静态演示"
+          : "Fusion Engine";
+      renderViews(payload);
+      renderReport(payload);
     }
 
     function renderViews(payload) {
@@ -822,6 +835,213 @@
     async function dataUrlToBlob(dataUrl) {
       const response = await fetch(dataUrl);
       return response.blob();
+    }
+
+    async function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => resolve(String(reader.result || "")));
+        reader.addEventListener("error", () => reject(new Error("图片读取失败")));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function buildStaticDemoPayload() {
+      if (!currentFile) throw new Error("没有可分析的图片");
+      if (!currentImageDataUrl) currentImageDataUrl = await fileToDataUrl(currentFile);
+      const image = await loadDataUrlImage(currentImageDataUrl);
+      const probability = staticDemoProbability(currentFile.name, activeCase?.id);
+      const confidence = Math.min(0.86, Math.max(0.42, Math.abs(probability - 0.5) * 1.7));
+      const riskLevel = probability >= 0.72 ? "high" : probability >= 0.55 ? "medium" : probability <= 0.32 ? "low" : "uncertain";
+      const label = probability >= 0.55 ? "ai_generated" : "real";
+      const payload = {
+        file_name: currentFile.name,
+        label,
+        probability_ai_generated: probability,
+        confidence,
+        risk_level: riskLevel,
+        backend: "static-demo",
+        image: { width: image.width, height: image.height, mode: "RGB" },
+        evidence: [
+          "GitHub Pages 静态演示：浏览器端生成可交互样例报告",
+          "真实部署接入 Python/Fusion 后端后会返回模型推理结果",
+        ],
+        raw: { mode: "static-pages-fallback" },
+      };
+      payload.propagation_views = await makeStaticPropagationViews(currentImageDataUrl);
+      payload.report = buildStaticReport(payload);
+      return payload;
+    }
+
+    function staticDemoProbability(fileName, caseId) {
+      const base = { newsroom: 0.46, brand: 0.76, platform: 0.61 }[caseId] ?? 0.52;
+      let hash = 0;
+      for (const ch of String(fileName)) hash = (hash * 31 + ch.charCodeAt(0)) % 997;
+      const offset = ((hash % 17) - 8) / 100;
+      return Math.max(0.08, Math.min(0.92, base + offset));
+    }
+
+    async function makeStaticPropagationViews(dataUrl) {
+      const image = await loadDataUrlImage(dataUrl);
+      return [
+        canvasView("jpeg_q50", "JPEG压缩", drawImageCanvas(image, image.width, image.height), "image/jpeg", 0.5),
+        canvasView("resize_384", "缩放转发", drawResizedCanvas(image, 384), "image/jpeg", 0.82),
+        canvasView("screenshot_like", "截图传播", drawScreenshotCanvas(image), "image/jpeg", 0.82),
+        canvasView("share_heavy", "重度分享", drawResizedCanvas(image, 448), "image/jpeg", 0.42),
+        canvasView("meme_like", "图文拼贴", drawMemeCanvas(image), "image/jpeg", 0.82),
+      ];
+    }
+
+    function loadDataUrlImage(dataUrl) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.addEventListener("load", () => resolve(image));
+        image.addEventListener("error", () => reject(new Error("图片预览生成失败")));
+        image.src = dataUrl;
+      });
+    }
+
+    function canvasView(id, label, canvas, type, quality) {
+      return {
+        id,
+        label,
+        width: canvas.width,
+        height: canvas.height,
+        image_data_url: canvas.toDataURL(type, quality),
+      };
+    }
+
+    function drawImageCanvas(image, width, height) {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width));
+      canvas.height = Math.max(1, Math.round(height));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    }
+
+    function drawResizedCanvas(image, maxEdge) {
+      const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
+      return drawImageCanvas(image, image.width * scale, image.height * scale);
+    }
+
+    function drawScreenshotCanvas(image) {
+      const preview = drawResizedCanvas(image, 520);
+      const pad = 28;
+      const bar = 46;
+      const canvas = document.createElement("canvas");
+      canvas.width = preview.width + pad * 2;
+      canvas.height = preview.height + pad * 2 + bar;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#edf1f5";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(pad, pad, preview.width, preview.height + bar);
+      ctx.fillStyle = "#e5e9ef";
+      ctx.fillRect(pad, pad, preview.width, bar);
+      ctx.fillStyle = "#c2cad5";
+      ctx.fillRect(pad + 12, pad + 17, Math.max(20, preview.width - 24), 8);
+      ctx.drawImage(preview, pad, pad + bar);
+      return canvas;
+    }
+
+    function drawMemeCanvas(image) {
+      const preview = drawResizedCanvas(image, 480);
+      const band = Math.max(40, Math.round(preview.height / 8));
+      const canvas = document.createElement("canvas");
+      canvas.width = preview.width;
+      canvas.height = preview.height + band * 2;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(preview, 0, band);
+      ctx.strokeStyle = "#d7dde6";
+      ctx.strokeRect(0, 0, canvas.width, band);
+      ctx.strokeRect(0, canvas.height - band, canvas.width, band);
+      return canvas;
+    }
+
+    function buildStaticReport(payload) {
+      const probability = payload.probability_ai_generated || 0;
+      const confidence = payload.confidence || 0;
+      const riskLevel = payload.risk_level || "uncertain";
+      const label = payload.label || "real";
+      const now = new Date();
+      const reportId = `SG-${dateStamp(now)}-${Math.random().toString(16).slice(2, 10).toUpperCase()}`;
+      let conclusion;
+      let action;
+      let uncertainty;
+      if (riskLevel === "uncertain" || confidence < 0.2) {
+        conclusion = "需人工复核";
+        action = "模型置信度较低，建议结合来源、上下文和人工审核后再使用。";
+        uncertainty = "高";
+      } else if (label === "ai_generated") {
+        conclusion = "疑似AI生成";
+        action = "建议暂缓公开使用，进入人工复核或进一步取证流程。";
+        uncertainty = confidence >= 0.6 ? "低" : "中";
+      } else {
+        conclusion = "倾向真实";
+        action = "可作为低风险样本进入后续流程，但仍建议保留来源记录。";
+        uncertainty = confidence >= 0.6 ? "低" : "中";
+      }
+      return {
+        product: "ShareGuard影像鉴真",
+        report_type: "真实传播链路鉴真报告",
+        report_id: reportId,
+        generated_at: now.toISOString(),
+        subject: {
+          file_name: payload.file_name,
+          image_size: `${payload.image.width}x${payload.image.height}`,
+          backend: payload.backend,
+        },
+        conclusion,
+        risk_level: riskLevel,
+        ai_probability: probability,
+        confidence,
+        uncertainty,
+        recommended_action: action,
+        sections: [
+          {
+            title: "检测结论",
+            items: [
+              `综合结论：${conclusion}`,
+              `AI生成概率：${(probability * 100).toFixed(1)}%`,
+              `风险等级：${riskLevel}`,
+            ],
+          },
+          {
+            title: "传播链路证据",
+            items: [
+              "已生成5种传播退化视图用于对照复核。",
+              "覆盖JPEG压缩、缩放转发、截图传播、重度分享和图文拼贴等常见场景。",
+            ],
+          },
+          {
+            title: "处置建议",
+            items: [action, "建议将报告编号、原始图像来源和人工复核记录一并归档。"],
+          },
+        ],
+        export_highlights: [
+          "GitHub Pages 静态演示可展示完整比赛Demo闭环。",
+          "真实后端接入后可替换为融合模型推理结果。",
+          "报告编号和生成时间便于平台归档与后续追踪。",
+        ],
+        review_notes: [
+          "系统面向压缩、截图、转发和二次编辑后的真实传播图像。",
+          "风险等级由模型分数、置信度和不确定性共同决定。",
+          "建议保留原始来源、上传时间和人工复核记录。",
+        ],
+        disclaimer: "本报告为技术辅助鉴真结果，不替代司法鉴定或最终法律结论。",
+      };
+    }
+
+    function dateStamp(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}${m}${d}`;
     }
 
     function renderReport(payload) {
