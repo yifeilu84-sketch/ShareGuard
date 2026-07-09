@@ -1,0 +1,23 @@
+# Frequency-Only Baseline Configuration
+model_type: frequency
+backbone: null
+num_classes: 1
+
+# Frequency feature settings
+freq_dim: 128
+freq_type: radial_fft  # radial_fft or srm
+hidden_dim: 256
+num_layers: 2
+dropout: 0.2
+
+# Training
+lr: 1e-3
+weight_decay: 1e-4
+batch_size: 512
+epochs: 30
+patience: 5
+seed: 42
+
+# Data
+image_size: 512
+num_workers: 4

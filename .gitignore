@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Data (too large for git)
+/data/
+data/raw/
+data/degraded_test/
+data/feature_cache/
+*.pt
+*.pth
+*.npy
+*.npz
+
+# Outputs
+/output/
+/outputs/
+outputs/checkpoints/
+outputs/logs/
+outputs/figures/
+
+# Local model bundles and downloaded artifacts
+/model_artifacts/
+
+# HPC
+*.out
+*.err
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Wandb
+wandb/
+
+# Temporary
+*.tmp
+*.log
+.playwright-cli/
+platform_stdout.log
+platform_stderr.log

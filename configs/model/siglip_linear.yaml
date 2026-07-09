@@ -1,0 +1,21 @@
+# SigLIP Linear Probe Configuration
+model_type: linear
+backbone: siglip_base_patch16_224
+num_classes: 1
+dropout: 0.0
+
+# Training
+lr: 1e-3
+weight_decay: 1e-4
+batch_size: 256
+epochs: 20
+patience: 5
+seed: 42
+
+# Data
+image_size: 224
+num_workers: 4
+
+# Feature caching
+train_features: null
+val_features: null

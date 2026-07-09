@@ -1,0 +1,38 @@
+# RIDE Model Configuration
+model_type: ride
+backbone: dinov2_vitb14
+feat_dim: 768
+num_classes: 1
+
+# RIDE-specific
+use_freq: true
+use_std: true
+freq_dim: 128
+freq_hidden: 128
+hidden_dim: 512
+dropout: 0.2
+
+# Multi-view settings
+num_views: 4
+view_degradations:
+  - identity
+  - resize_0.75
+  - jpeg_q95
+  - crop_90
+
+# Training
+lr: 1e-4
+weight_decay: 1e-4
+batch_size: 32
+epochs: 30
+patience: 5
+seed: 42
+
+# Loss
+lambda_cons: 0.1
+cons_type: variance  # variance, kl, mse
+pos_weight: null
+
+# Data
+image_size: 512
+num_workers: 4

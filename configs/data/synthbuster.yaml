@@ -1,0 +1,6 @@
+# Synthbuster Dataset Configuration
+dataset: synthbuster
+root: data/raw/Synthbuster
+
+# Test-only dataset
+manifest_test: data/manifests/synthbuster_test.csv

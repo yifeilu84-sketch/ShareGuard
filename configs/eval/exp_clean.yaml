@@ -1,0 +1,22 @@
+# Clean Evaluation Experiment
+experiment_name: clean_evaluation
+seed: 42
+
+# Models to evaluate
+models:
+  - name: clip_linear
+    checkpoint: outputs/checkpoints/clip_linear_best.pt
+    config: configs/model/clip_linear.yaml
+  - name: dinov2_linear
+    checkpoint: outputs/checkpoints/dinov2_linear_best.pt
+    config: configs/model/dinov2_linear.yaml
+  - name: ride
+    checkpoint: outputs/checkpoints/ride_best.pt
+    config: configs/model/ride.yaml
+
+# Test sets
+test_sets:
+  clean: data/manifests/genimage_test.csv
+
+# Output
+output_dir: outputs/tables/clean_eval

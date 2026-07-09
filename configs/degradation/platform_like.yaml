@@ -1,0 +1,5 @@
+# Platform-Inspired Degradation Configurations
+degradations:
+  - name: twitter_like
+  - name: facebook_like
+  - name: telegram_like

@@ -1,0 +1,60 @@
+# Evaluation Grid Configuration
+# Defines all combinations to evaluate
+
+# Models to evaluate
+models:
+  - name: clip_lp
+    checkpoint: outputs/checkpoints/clip_linear/best.pt
+    config: configs/model/clip_linear.yaml
+  - name: dinov2_lp
+    checkpoint: outputs/checkpoints/dinov2_linear/best.pt
+    config: configs/model/dinov2_linear.yaml
+  - name: siglip_lp
+    checkpoint: outputs/checkpoints/siglip_linear/best.pt
+    config: configs/model/siglip_linear.yaml
+  - name: freq_only
+    checkpoint: outputs/checkpoints/freq_only/best.pt
+    config: configs/model/freq_only.yaml
+  - name: ride
+    checkpoint: outputs/checkpoints/ride/best.pt
+    config: configs/model/ride.yaml
+  - name: shareguard
+    checkpoint: outputs/checkpoints/shareguard_dinov2b/best.pt
+    config: configs/train/shareguard_dinov2b.yaml
+
+# Test datasets
+datasets:
+  - name: genimage_unseen
+    manifest: data/manifests/genimage_test.csv
+  - name: synthbuster
+    manifest: data/manifests/synthbuster_test.csv
+  - name: truefake_shared
+    manifest: data/manifests/truefake_test.csv
+
+# Degradations to evaluate
+degradations:
+  - name: clean
+    manifest_suffix: ""
+  - name: jpeg_q50
+    manifest_suffix: "_jpeg_q50"
+  - name: resize_720
+    manifest_suffix: "_resize_720"
+  - name: screenshot_like
+    manifest_suffix: "_screenshot_like"
+  - name: meme_like
+    manifest_suffix: "_meme_like"
+  - name: compound_heavy
+    manifest_suffix: "_compound_heavy"
+  - name: x_like
+    manifest_suffix: "_x_like"
+  - name: whatsapp_like
+    manifest_suffix: "_whatsapp_like"
+
+# Output
+output_dir: outputs/results/
+metrics:
+  - auc
+  - ap
+  - f1
+  - ece
+  - robustness_drop

@@ -1,0 +1,47 @@
+# ShareGuard Training Configuration (DINOv2-B)
+model_type: shareguard
+encoder: dinov2_vitb14
+encoder_mode: frozen  # frozen, adapter, lora
+feat_dim: 768
+
+# ShareGuard specific
+use_freq: true
+use_std: true
+freq_dim: 128
+hidden_dim: 512
+dropout: 0.2
+num_generators: 0  # Set to number of generators to enable debias
+uncertainty_mode: view_variance  # view_variance or learned
+
+# Multi-view
+num_views: 4
+view_degradations:
+  - identity
+  - jpeg_q90
+  - resize_crop
+  - platform_random
+
+# Training
+lr: 1e-4
+weight_decay: 1e-4
+batch_size: 32
+epochs: 30
+patience: 5
+seed: 42
+
+# Loss weights
+lambda_inv: 0.1
+lambda_cons: 0.1
+lambda_gen: 0.0  # Enable when num_generators > 0
+lambda_cal: 0.0
+pos_weight: null
+inv_mode: mse  # mse or ntxent
+cons_type: variance
+
+# Data
+image_size: 512
+num_workers: 4
+
+# Feature caching
+train_features: null
+val_features: null

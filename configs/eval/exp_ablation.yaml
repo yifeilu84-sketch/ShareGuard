@@ -1,0 +1,29 @@
+# Ablation Study Experiment
+experiment_name: ablation
+seed: 42
+
+# Ablation variants
+variants:
+  - name: semantic_only
+    config: configs/model/dinov2_linear.yaml
+    description: DINOv2 linear probe (no multi-view, no frequency)
+  - name: semantic_freq
+    config: configs/model/ride_noview.yaml
+    description: DINOv2 + frequency branch (no multi-view)
+  - name: multiview_mean
+    config: configs/model/ride_meanonly.yaml
+    description: Multi-view with mean aggregation only
+  - name: multiview_mean_std
+    config: configs/model/ride_nofreq.yaml
+    description: Multi-view with mean+std, no frequency
+  - name: full_ride
+    config: configs/model/ride.yaml
+    description: Full RIDE (multi-view + freq + consistency)
+
+# Test sets
+test_sets:
+  clean: data/manifests/genimage_test.csv
+  compound: data/manifests/genimage_test_share_medium.csv
+
+# Output
+output_dir: outputs/tables/ablation

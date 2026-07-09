@@ -1,0 +1,81 @@
+# Pilot Experiment Configuration - 10K GenImage Subset
+# Purpose: Verify robustness drop phenomenon with DINOv2 frozen linear probe
+
+pilot:
+  name: pilot_10k_dinov2
+  description: "10K GenImage subset, DINOv2 frozen linear probe, clean + JPEG q50 + compound_medium"
+  seed: 42
+
+# Data subset
+data:
+  source_dataset: genimage
+  source_root: data/raw/GenImage
+  subset_size: 10000
+  # Use SD v1.4 + v1.5 for training (seen generators), keep others for future cross-gen eval
+  train_generators:
+    - stable_diffusion_v1
+    - stable_diffusion_v1_5
+  # Balance: 50% real, 50% fake
+  class_balance: true
+
+# Split ratios (of the 10K subset)
+split:
+  train_ratio: 0.70   # 7000 images
+  val_ratio: 0.15     # 1500 images
+  test_ratio: 0.15    # 1500 images
+  split_by: source_id  # prevent content leakage
+
+# Model
+model:
+  backbone: dinov2_vitb14
+  frozen: true
+  classifier: linear_probe
+  num_classes: 1
+  dropout: 0.0
+  feat_dim: 768
+
+# Training
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  batch_size: 256
+  epochs: 20
+  patience: 5
+  optimizer: adamw
+  image_size: 512
+
+# Degradations to test
+degradations:
+  - name: jpeg_q50
+    type: single
+    description: "JPEG compression at quality 50"
+  - name: share_medium
+    type: compound
+    description: "Resize(720) + CenterCrop(0.95) + JPEG(70)"
+
+# Evaluation metrics
+metrics:
+  primary: auc
+  all:
+    - auc
+    - ap
+    - f1
+    - accuracy
+    - ece
+
+# Success criteria
+success:
+  min_clean_auc: 0.85
+  min_robustness_drop_jpeg_q50: 0.03      # AUC drop >= 3% indicates phenomenon exists
+  min_robustness_drop_share_medium: 0.05   # AUC drop >= 5% for compound degradation
+  max_acceptable_clean_auc: 0.99           # If >0.99, subset may be too easy
+
+# Output paths
+outputs:
+  manifest_dir: data/manifests/pilot
+  feature_dir: data/cache_features/pilot
+  degraded_dir: data/degraded/pilot
+  checkpoint_dir: outputs/checkpoints/pilot
+  results_dir: outputs/tables/pilot
+  figures_dir: outputs/figures/pilot
+  log_dir: outputs/logs/pilot

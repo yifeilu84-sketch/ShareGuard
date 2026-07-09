@@ -1,0 +1,8 @@
+# Compound Degradation Configurations (simulating sharing pipelines)
+degradations:
+  - name: share_light
+  - name: share_medium
+  - name: share_heavy
+  - name: screenshot_like
+  - name: meme_like
+  - name: platform_like_random

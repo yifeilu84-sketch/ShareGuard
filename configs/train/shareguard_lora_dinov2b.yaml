@@ -1,0 +1,47 @@
+# ShareGuard LoRA Training Configuration
+model_type: shareguard
+encoder: dinov2_vitb14
+encoder_mode: lora
+feat_dim: 768
+
+# LoRA settings
+lora_rank: 4
+lora_alpha: 1.0
+lora_target_modules:
+  - qkv
+  - proj
+
+# ShareGuard specific
+use_freq: true
+use_std: true
+freq_dim: 128
+hidden_dim: 512
+dropout: 0.2
+num_generators: 0
+uncertainty_mode: view_variance
+
+# Multi-view
+num_views: 4
+view_degradations:
+  - identity
+  - jpeg_q90
+  - resize_crop
+  - platform_random
+
+# Training
+lr: 5e-5
+weight_decay: 1e-4
+batch_size: 16
+epochs: 20
+patience: 5
+seed: 42
+
+# Loss weights
+lambda_inv: 0.1
+lambda_cons: 0.1
+lambda_gen: 0.0
+lambda_cal: 0.0
+
+# Data
+image_size: 512
+num_workers: 4

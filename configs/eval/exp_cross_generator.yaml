@@ -1,0 +1,28 @@
+# Cross-Generator Evaluation Experiment
+experiment_name: cross_generator
+seed: 42
+
+# Training generators (seen)
+train_generators:
+  - stable_diffusion_v1
+  - stable_diffusion_v1_5
+  - adm
+  - glide
+
+# Test generators (unseen)
+test_generators:
+  - midjourney
+  - dalle
+  - stable_diffusion_xl
+
+# Models to evaluate
+models:
+  - name: clip_linear
+    checkpoint: outputs/checkpoints/clip_linear_best.pt
+  - name: dinov2_linear
+    checkpoint: outputs/checkpoints/dinov2_linear_best.pt
+  - name: ride
+    checkpoint: outputs/checkpoints/ride_best.pt
+
+# Output
+output_dir: outputs/tables/cross_generator

@@ -1,0 +1,21 @@
+# DINOv2 Linear Probe Configuration
+model_type: linear
+backbone: dinov2_vitb14
+num_classes: 1
+dropout: 0.0
+
+# Training
+lr: 1e-3
+weight_decay: 1e-4
+batch_size: 256
+epochs: 20
+patience: 5
+seed: 42
+
+# Data
+image_size: 512
+num_workers: 4
+
+# Feature caching
+train_features: null
+val_features: null

@@ -1,0 +1,6 @@
+# TrueFake Dataset Configuration
+dataset: truefake
+root: data/raw/TrueFake
+
+# Test-only dataset (includes social media shared images)
+manifest_test: data/manifests/truefake_test.csv

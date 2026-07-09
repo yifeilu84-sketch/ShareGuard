@@ -1,0 +1,15 @@
+# Single Degradation Configurations
+degradations:
+  - name: jpeg_q95
+  - name: jpeg_q75
+  - name: jpeg_q50
+  - name: jpeg_q30
+  - name: webp_q75
+  - name: resize_0.75
+  - name: resize_0.50
+  - name: gaussian_blur
+  - name: motion_blur
+  - name: brightness
+  - name: contrast
+  - name: crop_90
+  - name: crop_75

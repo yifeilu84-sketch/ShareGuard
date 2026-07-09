@@ -1,0 +1,21 @@
+# GenImage Dataset Configuration
+dataset: genimage
+root: data/raw/GenImage
+
+# Generators for train/test split
+train_generators:
+  - stable_diffusion_v1
+  - stable_diffusion_v1_5
+  - adm
+  - glide
+
+test_generators:
+  - midjourney
+  - dalle
+  - stable_diffusion_xl
+
+# Manifest paths
+manifest_all: data/manifests/genimage_all.csv
+manifest_train: data/manifests/genimage_train.csv
+manifest_val: data/manifests/genimage_val.csv
+manifest_test: data/manifests/genimage_test.csv
