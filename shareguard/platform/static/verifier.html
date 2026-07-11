@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>ShareGuard Evidence Package Verifier</title>
+  <link rel="stylesheet" href="dossier.css">
+  <script src="i18n.js" defer></script>
+  <script src="verifier.js" defer></script>
+</head>
+<body class="verifier-body" data-i18n-title="verifier.pageTitle">
+  <header class="verifier-bar">
+    <a class="brand-lockup" href="index.html">
+      <span class="brand-mark" aria-hidden="true">SG</span>
+      <span><strong>ShareGuard</strong><small>INDEPENDENT EVIDENCE VERIFIER</small></span>
+    </a>
+    <span>STATIC / OFFLINE-CAPABLE / NO MODEL SERVICE</span>
+    <button id="languageToggle" class="language-toggle" type="button" aria-label="Switch to English">EN</button>
+    <a href="index.html" data-i18n="verifier.back">返回工作台</a>
+  </header>
+
+  <main class="verifier-main">
+    <section class="verifier-intake" aria-labelledby="verifierTitle">
+      <span>PHYSICAL EVIDENCE OPENING</span>
+      <h1 id="verifierTitle" data-i18n="verifier.title">物证开箱校验器</h1>
+      <p data-i18n="verifier.body">选择 ShareGuard `.sgd` 证据包。所有摘要重算与签名验证均在当前浏览器完成。</p>
+      <label id="verifierDrop" class="verifier-drop" for="verifierInput">
+        <strong data-i18n="verifier.choose">选择 .sgd 证据包</strong>
+        <span data-i18n="verifier.local">文件不会上传</span>
+      </label>
+      <input id="verifierInput" class="visually-hidden" type="file" accept=".sgd,application/json,application/vnd.shareguard.dossier+json">
+      <div id="detachedMediaPrompt" class="detached-media-prompt" hidden>
+        <p><strong data-i18n="verifier.detachedTitle">选择签封时对应的原始媒体</strong><span data-i18n="verifier.detachedBody">大型媒体未内嵌在证据包中。文件只会在本机计算 SHA-256。</span></p>
+        <label class="button secondary" for="detachedMediaInput" data-i18n="verifier.detachedTitle">选择签封时对应的原始媒体</label>
+        <input id="detachedMediaInput" class="visually-hidden" type="file">
+      </div>
+      <p class="decision-disclaimer" data-i18n="verifier.disclaimer">浏览器演示包使用随包公钥验证完整性；生产包还需核验 ShareGuard 私有根证书链。</p>
+    </section>
+
+    <section id="verificationResult" class="verification-result" aria-live="polite">
+      <header>
+        <span>VERIFICATION STATE</span>
+        <strong id="verificationState">AWAITING PACKAGE</strong>
+      </header>
+      <div class="verification-empty" id="verificationEmpty">
+        <span>NO PACKAGE LOADED</span>
+      </div>
+      <div id="verificationDetail" hidden>
+        <div class="verification-verdict">
+          <span id="verificationCode">CASE NOT LOADED</span>
+          <h2 id="verificationTitle">UNVERIFIED</h2>
+          <p id="verificationNarrative">PACKAGE REQUIRED</p>
+        </div>
+        <figure id="verifiedMedia" hidden>
+          <img id="verifiedImage" src="assets/flagship-event.jpg" alt="证据包内封存的影像" data-i18n-alt="verifier.imageAlt">
+          <figcaption id="verifiedFile">NOT LOADED</figcaption>
+        </figure>
+        <dl class="verification-register">
+          <div><dt>SHA-256</dt><dd id="verifiedDigest">NOT LOADED</dd></div>
+          <div><dt>SIGNATURE</dt><dd id="verifiedSignature">NOT LOADED</dd></div>
+          <div><dt>SEALED AT</dt><dd id="verifiedAt">NOT LOADED</dd></div>
+          <div><dt>SCOPE</dt><dd id="verifiedScope">NOT LOADED</dd></div>
+        </dl>
+      </div>
+    </section>
+  </main>
+
+  <footer class="verifier-footer">
+    <span>SHAREGUARD DOSSIER FORMAT / VERSION 1</span>
+    <span>LOCAL CRYPTOGRAPHIC VERIFICATION</span>
+  </footer>
+</body>
+</html>

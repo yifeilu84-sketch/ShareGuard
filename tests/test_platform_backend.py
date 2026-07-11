@@ -132,105 +132,167 @@ class PlatformBackendTests(unittest.TestCase):
             analyze_image_bytes(b"not an image", backend, "bad.bin")
 
     def test_static_page_exposes_business_report_export_actions(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+        static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        script = (static / "dossier.js").read_text(encoding="utf-8")
 
         self.assertIn('id="saveHtmlReportButton"', html)
         self.assertIn('id="printReportButton"', html)
         self.assertIn('id="downloadJsonButton"', html)
-        self.assertIn("function buildReportHtml", html)
-        self.assertIn("ShareGuard影像鉴真报告", html)
+        self.assertIn("function buildReportHtml", script)
+        self.assertIn("ShareGuard影像鉴真报告", script)
 
     def test_static_page_exposes_competition_judge_workflows(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+        static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        script = (static / "dossier.js").read_text(encoding="utf-8")
 
-        self.assertIn("评委快速理解入口", html)
-        self.assertIn("痛点-技术-产品-落地", html)
-        self.assertIn("创新性", html)
-        self.assertIn("社会价值", html)
-        self.assertIn("商业性", html)
-        self.assertIn("媒体发布前核验", html)
-        self.assertIn("品牌谣言澄清", html)
-        self.assertIn("平台人工复核", html)
-        self.assertIn("const sampleCases", html)
-        self.assertIn("function loadSampleCase", html)
-        self.assertIn("function renderCaseContext", html)
+        self.assertIn("媒体发布前核验", script)
+        self.assertIn("品牌谣言澄清", script)
+        self.assertIn("平台人工复核", script)
+        self.assertIn("GLOBAL THREAT LEVEL", html)
+        self.assertIn("const sampleCases", script)
+        self.assertIn("function loadSampleCase", script)
+        self.assertIn("function renderCaseContext", script)
 
     def test_static_page_supports_github_pages_demo_fallback(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+        static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        script = (static / "dossier.js").read_text(encoding="utf-8")
 
-        self.assertIn("公开演示模式，核心模型通过私有API接入", html)
-        self.assertIn("static-demo", html)
-        self.assertIn("function buildStaticDemoPayload", html)
-        self.assertIn("function shouldUseStaticDemo", html)
-        self.assertIn("function makeStaticPropagationViews", html)
-        self.assertIn("function buildStaticReport", html)
+        self.assertIn("产品演示模式，当前结果仅展示工作流", html)
+        self.assertIn("static-demo", script)
+        self.assertIn("function buildStaticDemoPayload", script)
+        self.assertIn("function shouldUseStaticDemo", script)
+        self.assertIn("function makeStaticPropagationViews", script)
+        self.assertIn("function buildStaticReport", script)
 
     def test_static_page_opens_as_trust_workbench_with_flagship_case(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+        static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        script = (static / "dossier.js").read_text(encoding="utf-8")
 
         self.assertIn("ShareGuard影像信任工作台", html)
-        self.assertIn("const DEFAULT_CASE_ID = \"brand\"", html)
-        self.assertIn("loadSampleCase(DEFAULT_CASE_ID)", html)
-        self.assertIn("处置决策", html)
+        self.assertIn('const DEFAULT_CASE_ID = "geopolitical"', script)
+        self.assertIn("loadSampleCase(DEFAULT_CASE_ID)", script)
+        self.assertIn("ACTION REQUIRED", html)
         self.assertIn("建议动作", html)
         self.assertIn("AI生成风险", html)
-        self.assertIn("传播后仍保持中高风险，建议进入人工复核", html)
+        self.assertIn("暂缓发布", html)
         self.assertNotIn(">Demo Engine<", html)
 
-    def test_static_page_uses_enterprise_trust_visual_system(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+    def test_static_page_uses_interactive_dossier_visual_system(self):
+        static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        css = (static / "dossier.css").read_text(encoding="utf-8").lower()
 
-        self.assertIn('class="app-shell"', html)
-        self.assertIn('class="hero-panel"', html)
-        self.assertIn('class="trust-ribbon"', html)
-        self.assertIn("--navy: #0f172a", html)
-        self.assertIn("--cta: #0369a1", html)
-        self.assertIn("证据链完整", html)
-        self.assertIn("私有模型API", html)
-        self.assertIn("loading-skeleton", html)
-        self.assertIn("@media (prefers-reduced-motion: reduce)", html)
+        self.assertIn('class="dossier-shell"', html)
+        self.assertIn('id="radarView"', html)
+        self.assertIn('id="dossierView"', html)
+        self.assertIn('id="reviewerView"', html)
+        self.assertIn("--paper: #f7f5f0", css)
+        self.assertIn("--ink: #1a1a1a", css)
+        self.assertIn("--risk: #d32f2f", css)
+        self.assertIn("--caution: #d97706", css)
+        self.assertIn("--credible: #2e7d32", css)
+        self.assertNotIn("linear-gradient", css)
+        self.assertNotIn("box-shadow", css)
+        self.assertNotIn("border-radius", css)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", css)
 
     def test_static_page_replaces_mock_backend_with_product_demo_payload(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn('payload.backend === "mock"', html)
-        self.assertIn("后端为mock时切换到公开演示结果", html)
-        self.assertIn("setAnalysisPayload(await buildStaticDemoPayload())", html)
-
-    def test_static_page_implements_editorial_forensics_flow(self):
-        root = Path(__file__).resolve().parents[1]
-        html = (root / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
-        flagship = (
-            root
+        script = (
+            Path(__file__).resolve().parents[1]
             / "shareguard"
             / "platform"
             / "static"
+            / "dossier.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('response.headers.get("X-ShareGuard-Demo") === "true"', script)
+        self.assertIn('payload.backend === "mock"', script)
+        self.assertIn("后端为mock时切换到公开演示结果", script)
+        self.assertIn("setAnalysisPayload(await buildStaticDemoPayload())", script)
+
+    def test_static_page_implements_editorial_forensics_flow(self):
+        root = Path(__file__).resolve().parents[1]
+        static = root / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        script = (static / "dossier.js").read_text(encoding="utf-8")
+        verifier = (static / "verifier.html").read_text(encoding="utf-8")
+        verifier_script = (static / "verifier.js").read_text(encoding="utf-8")
+        flagship = (
+            static
             / "assets"
             / "flagship-event.jpg"
         )
 
-        self.assertIn('class="entry-layout"', html)
-        self.assertIn('class="evidence-stage"', html)
+        self.assertIn('id="waterfallFeed"', html)
+        self.assertIn('id="quarantineZone"', html)
+        self.assertIn('id="evidenceViewport"', html)
+        self.assertIn('id="forensicCanvas"', html)
+        self.assertIn('id="compareRange"', html)
+        self.assertIn('id="decisionPanel"', html)
+        self.assertIn('id="sealDialog"', html)
         self.assertIn('id="stageViewLabel"', html)
-        self.assertIn('id="resultSection"', html)
-        self.assertIn("function selectEvidenceView", html)
+        self.assertIn("function selectEvidenceView", script)
+        self.assertIn("function runSealingRitual", script)
+        self.assertIn("function createEvidencePackage", script)
+        self.assertIn("ShareGuard Evidence Package Verifier", verifier)
+        self.assertIn("crypto.subtle.digest", verifier_script)
+        self.assertIn("crypto.subtle.verify", verifier_script)
         self.assertIn("assets/flagship-event.jpg", html)
         self.assertTrue(flagship.is_file())
         self.assertGreater(flagship.stat().st_size, 10_000)
+
+    def test_v11_frontend_hardening_contract(self):
+        static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        css = (static / "dossier.css").read_text(encoding="utf-8")
+        script = (static / "dossier.js").read_text(encoding="utf-8")
+        verifier_html = (static / "verifier.html").read_text(encoding="utf-8")
+        verifier_script = (static / "verifier.js").read_text(encoding="utf-8")
+        locale_path = static / "i18n.js"
+        crypto_worker_path = static / "crypto-worker.js"
+        self.assertTrue(locale_path.is_file())
+        self.assertTrue(crypto_worker_path.is_file())
+        locale_script = locale_path.read_text(encoding="utf-8")
+        crypto_worker = crypto_worker_path.read_text(encoding="utf-8")
+
+        self.assertIn('src="i18n.js"', html)
+        self.assertLess(html.index('src="i18n.js"'), html.index('src="dossier.js"'))
+        self.assertIn('id="languageToggle"', html)
+        self.assertIn('class="split-indicator"', html)
+        self.assertIn("window.ShareGuardI18n", locale_script)
+        self.assertIn('"zh-CN"', locale_script)
+        self.assertIn('"en"', locale_script)
+
+        self.assertIn("requestAnimationFrame(draw)", script)
+        self.assertIn('document.addEventListener("visibilitychange"', script)
+        self.assertNotIn("window.setInterval(draw, 180)", script)
+        self.assertIn('new Worker("crypto-worker.js")', script)
+        self.assertIn("runMainThreadCrypto", script)
+        self.assertIn("function decodeDataUrl", script)
+        self.assertIn("return decodeDataUrl(dataUrl)", script)
+        self.assertIn("data-lens-locked", script)
+        self.assertIn("typeWriterEffect", script)
+        self.assertIn('headers: { "Accept-Language"', script)
+
+        self.assertIn("crypto.subtle.digest", crypto_worker)
+        self.assertIn("crypto.subtle.sign", crypto_worker)
+        self.assertIn("mediaBuffer", crypto_worker)
+        self.assertIn("stableStringify", crypto_worker)
+
+        self.assertIn("env(safe-area-inset-bottom)", css)
+        self.assertIn(".split-indicator", css)
+        self.assertIn("@keyframes stamp-down", css)
+        self.assertIn("@keyframes reticle-lock", css)
+        self.assertIn(".quarantine-card button:focus-visible", css)
+        self.assertIn(".evidence-version:focus-visible", css)
+
+        self.assertIn('id="detachedMediaInput"', verifier_html)
+        self.assertIn("verifyDetachedMedia", verifier_script)
+        self.assertIn("MEDIA FILE REQUIRED", verifier_script)
 
     def test_public_demo_package_contains_only_safe_product_assets(self):
         root = Path(__file__).resolve().parents[1]
@@ -266,14 +328,14 @@ class PlatformBackendTests(unittest.TestCase):
         for token in forbidden:
             self.assertNotIn(token, combined)
 
-    def test_public_demo_uses_same_trust_authority_shell(self):
+    def test_public_demo_uses_same_dossier_visual_language(self):
         html = (Path(__file__).resolve().parents[1] / "public_demo" / "index.html").read_text(encoding="utf-8")
 
-        self.assertIn("--navy: #0f172a", html)
-        self.assertIn("--cta: #0369a1", html)
-        self.assertIn('class="trust-ribbon"', html)
+        self.assertIn("--paper: #f7f5f0", html.lower())
+        self.assertIn("--ink: #1a1a1a", html.lower())
+        self.assertIn('class="public-dossier"', html)
         self.assertIn("证据链完整", html)
-        self.assertIn("私有模型API", html)
+        self.assertIn("私有模型 API", html)
 
     def test_gitignore_blocks_private_model_and_secret_artifacts(self):
         gitignore = (Path(__file__).resolve().parents[1] / ".gitignore").read_text(encoding="utf-8")

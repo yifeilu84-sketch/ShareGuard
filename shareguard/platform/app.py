@@ -29,12 +29,21 @@ from .service import AnalysisError, AnalysisService
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_ASSET_ROUTES = {
+    "/dossier.css": ("dossier.css", "text/css; charset=utf-8"),
+    "/dossier.js": ("dossier.js", "application/javascript; charset=utf-8"),
+    "/i18n.js": ("i18n.js", "application/javascript; charset=utf-8"),
+    "/crypto-worker.js": ("crypto-worker.js", "application/javascript; charset=utf-8"),
+    "/verifier.html": ("verifier.html", "text/html; charset=utf-8"),
+    "/verifier.js": ("verifier.js", "application/javascript; charset=utf-8"),
+}
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "img-src 'self' data: blob:; "
     "style-src 'self' 'unsafe-inline'; "
     "script-src 'self' 'unsafe-inline'; "
+    "worker-src 'self'; "
     "connect-src 'self'; "
     "base-uri 'none'; "
     "frame-ancestors 'none'; "
@@ -205,11 +214,31 @@ def make_handler(
             )
 
         def do_GET(self):
-            if self.path in {"/", "/index.html"}:
+            request_path = self.path.split("?", 1)[0]
+            if request_path in {"/", "/index.html"}:
                 path = STATIC_DIR / "index.html"
                 self.send_payload(200, "text/html; charset=utf-8", path.read_bytes())
                 return
-            if self.path == "/assets/flagship-event.jpg":
+            if request_path == "/favicon.ico":
+                self.send_payload(
+                    204,
+                    "image/x-icon",
+                    b"",
+                    extra_headers={"Cache-Control": "public, max-age=86400"},
+                )
+                return
+            static_asset = STATIC_ASSET_ROUTES.get(request_path)
+            if static_asset:
+                filename, content_type = static_asset
+                path = STATIC_DIR / filename
+                self.send_payload(
+                    200,
+                    content_type,
+                    path.read_bytes(),
+                    extra_headers={"Cache-Control": "no-cache"},
+                )
+                return
+            if request_path == "/assets/flagship-event.jpg":
                 path = STATIC_DIR / "assets" / "flagship-event.jpg"
                 self.send_payload(
                     200,
@@ -309,12 +338,18 @@ def make_handler(
                     filename,
                     request_id,
                 )
+                response_headers = {}
+                if isinstance(backend, MockDetectorBackend):
+                    response_headers["X-ShareGuard-Demo"] = "true"
                 if self.path == "/v1/analyze":
-                    self.send_json(outcome.public_payload)
+                    self.send_json(
+                        outcome.public_payload,
+                        extra_headers=response_headers,
+                    )
                 else:
                     self.send_json(
                         outcome.legacy_payload,
-                        extra_headers={"Deprecation": "true"},
+                        extra_headers={"Deprecation": "true", **response_headers},
                     )
             except AnalysisError as exc:
                 self.send_json(

@@ -127,6 +127,7 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertIn("probability_ai_generated", payload)
         self.assertEqual(payload["backend"], "private-model-api")
         self.assertEqual(headers.get("Deprecation"), "true")
+        self.assertEqual(headers.get("X-ShareGuard-Demo"), "true")
 
     def test_oversized_content_length_is_rejected_before_analysis(self):
         config = PlatformConfig(api_token="test-token", max_upload_bytes=8)
@@ -184,6 +185,7 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
         self.assertEqual(headers.get("Referrer-Policy"), "no-referrer")
         self.assertIn("default-src 'self'", headers.get("Content-Security-Policy", ""))
+        self.assertIn("worker-src 'self'", headers.get("Content-Security-Policy", ""))
 
     def test_flagship_visual_asset_is_served_locally(self):
         connection = http.client.HTTPConnection(
@@ -200,6 +202,32 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(content_type, "image/jpeg")
         self.assertGreater(len(raw), 10_000)
+
+    def test_dossier_static_assets_and_verifier_are_served_locally(self):
+        expected = {
+            "/dossier.css": "text/css; charset=utf-8",
+            "/dossier.js": "application/javascript; charset=utf-8",
+            "/i18n.js": "application/javascript; charset=utf-8",
+            "/crypto-worker.js": "application/javascript; charset=utf-8",
+            "/verifier.html": "text/html; charset=utf-8",
+            "/verifier.js": "application/javascript; charset=utf-8",
+        }
+
+        for path, expected_type in expected.items():
+            connection = http.client.HTTPConnection(
+                "127.0.0.1",
+                self.server.server_address[1],
+                timeout=5,
+            )
+            connection.request("GET", path)
+            response = connection.getresponse()
+            raw = response.read()
+            content_type = response.getheader("Content-Type")
+            connection.close()
+
+            self.assertEqual(response.status, 200, path)
+            self.assertEqual(content_type, expected_type, path)
+            self.assertGreater(len(raw), 100, path)
 
     def test_internal_error_does_not_expose_exception_or_backend(self):
         server = self.start_server(FailingBackend(), self.config)

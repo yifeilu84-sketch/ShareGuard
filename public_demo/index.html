@@ -3,162 +3,123 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ShareGuard 公开演示</title>
+  <title>ShareGuard公开案宗</title>
   <style>
     :root {
-      color-scheme: light;
-      --ink: #020617;
-      --muted: #475569;
-      --line: #d7dee8;
-      --navy: #0f172a;
-      --blue: #0369a1;
-      --blue-dark: #075985;
-      --cta: #0369a1;
-      --signal: #22c55e;
-      --surface: #ffffff;
-      --bg: #f8fafc;
-      font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      --paper: #F7F5F0;
+      --surface: #FCFBF8;
+      --ink: #1A1A1A;
+      --muted: #4A4A46;
+      --line: #1A1A1A;
+      --risk: #D32F2F;
+      --caution: #D97706;
+      --credible: #2E7D32;
+      --sans: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      --serif: "Iowan Old Style", "Noto Serif SC", Georgia, serif;
+      --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
     }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      color: var(--ink);
-      background:
-        linear-gradient(180deg, #0b1117 0, #101820 280px, var(--bg) 281px),
-        var(--bg);
+    body { margin: 0; color: var(--ink); background: var(--paper); font-family: var(--sans); line-height: 1.55; }
+    a, button { color: inherit; }
+    a:focus-visible { outline: 3px solid var(--caution); outline-offset: 2px; }
+    .public-dossier { min-height: 100vh; border: 1px solid var(--line); }
+    .public-bar { display: grid; grid-template-columns: minmax(240px, .7fr) minmax(280px, 1fr) auto; min-height: 68px; border-bottom: 1px solid var(--line); }
+    .public-bar > * { display: flex; align-items: center; padding: 12px 18px; border-right: 1px solid var(--line); }
+    .public-bar > *:last-child { border-right: 0; }
+    .brand { gap: 12px; text-decoration: none; }
+    .mark { display: grid; width: 40px; height: 40px; place-items: center; color: var(--paper); background: var(--ink); font-family: var(--serif); font-weight: 800; }
+    .brand strong, .brand small { display: block; }
+    .brand strong { font-family: var(--serif); font-size: 21px; }
+    .brand small, .public-bar > span, .public-bar > a:last-child { font-family: var(--mono); font-size: 10px; }
+    .status { gap: 9px; }
+    .status i { width: 9px; height: 9px; background: var(--credible); }
+    .public-main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(340px, .7fr); min-height: calc(100vh - 111px); }
+    .evidence { min-width: 0; border-right: 1px solid var(--line); }
+    .register { display: flex; justify-content: space-between; gap: 20px; min-height: 98px; padding: 18px; border-bottom: 1px solid var(--line); }
+    .register span, .register small, .brief span, .visual-register, .decision > span, .trust-row span, footer { font-family: var(--mono); font-size: 10px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin: 7px 0 0; font-family: var(--serif); font-size: 30px; line-height: 1.05; }
+    .register small { max-width: 33ch; color: var(--muted); line-height: 1.5; }
+    .brief { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+    .brief p { max-width: 72ch; margin: 0; }
+    .evidence-visual { position: relative; display: grid; min-height: 480px; place-items: center; overflow: hidden; color: #fff; background: #151515; }
+    .evidence-visual::before, .evidence-visual::after { content: ""; position: absolute; border: 1px solid rgba(255,255,255,.65); }
+    .evidence-visual::before { width: 46%; height: 62%; left: 12%; top: 18%; }
+    .evidence-visual::after { width: 20%; height: 28%; right: 14%; top: 30%; border-color: var(--risk); }
+    .visual-copy { position: relative; z-index: 1; max-width: 42ch; padding: 22px; border: 1px solid #fff; background: #151515; }
+    .visual-copy strong { display: block; font-family: var(--serif); font-size: 27px; }
+    .visual-copy span { display: block; margin-top: 9px; font-family: var(--mono); font-size: 10px; }
+    .visual-register { position: absolute; right: 0; bottom: 0; left: 0; display: flex; justify-content: space-between; padding: 10px 14px; border-top: 1px solid #fff; background: #151515; }
+    .trust-row { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
+    .trust-row div { min-height: 92px; padding: 14px; border-right: 1px solid var(--line); }
+    .trust-row div:last-child { border-right: 0; }
+    .trust-row strong, .trust-row span { display: block; }
+    .trust-row span { margin-top: 7px; color: var(--muted); line-height: 1.45; }
+    .decision { padding: 22px; background: var(--surface); }
+    .decision > span { color: var(--risk); }
+    .decision h2 { margin: 10px 0 22px; padding-bottom: 22px; border-bottom: 2px solid var(--risk); color: var(--risk); font-family: var(--serif); font-size: 48px; line-height: .95; letter-spacing: -.03em; }
+    .decision h2 em { display: block; margin-top: 14px; font-size: 24px; font-style: normal; letter-spacing: 0; }
+    .decision section { padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .decision h3 { font-family: var(--mono); font-size: 10px; }
+    .decision p { color: var(--muted); line-height: 1.7; }
+    .scenarios { display: grid; gap: 0; }
+    .scenarios p { margin: 0; padding: 12px 0; border-top: 1px solid #B8B4AA; }
+    .access { display: grid; min-height: 48px; margin-top: 20px; place-items: center; border: 1px solid var(--line); color: var(--paper); background: var(--ink); text-decoration: none; font-weight: 700; }
+    footer { display: flex; justify-content: space-between; min-height: 42px; padding: 12px 16px; border-top: 1px solid var(--line); }
+    @media (max-width: 850px) {
+      .public-bar, .public-main { grid-template-columns: 1fr; }
+      .public-bar > * { border-right: 0; border-bottom: 1px solid var(--line); }
+      .evidence { border-right: 0; }
+      .decision { border-top: 1px solid var(--line); }
     }
-    main {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 32px 20px;
-      display: grid;
-      gap: 18px;
+    @media (max-width: 560px) {
+      .register, footer { flex-direction: column; }
+      .brief { grid-template-columns: 1fr; }
+      .evidence-visual { min-height: 430px; }
+      .trust-row { grid-template-columns: 1fr; }
+      .trust-row div { border-right: 0; border-bottom: 1px solid var(--line); }
+      .decision h2 { font-size: 40px; }
     }
-    header,
-    section {
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 22px;
-    }
-    header {
-      color: #ffffff;
-      background:
-        linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 44%),
-        #0b1117;
-      border-color: rgba(15, 23, 42, 0.9);
-      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(28px, 4vw, 44px);
-      line-height: 1.12;
-    }
-    h2 {
-      margin: 0 0 10px;
-      font-size: 18px;
-    }
-    p {
-      margin: 10px 0 0;
-      color: var(--muted);
-      line-height: 1.65;
-    }
-    header p { color: #cbd5e1; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
-    }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      min-height: 30px;
-      padding: 0 10px;
-      border-radius: 999px;
-      color: #dbeafe;
-      background: rgba(34, 197, 94, 0.12);
-      border: 1px solid rgba(34, 197, 94, 0.28);
-      font-weight: 700;
-      font-size: 13px;
-    }
-    .trust-ribbon {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 18px;
-    }
-    .trust-item {
-      min-height: 82px;
-      padding: 12px;
-      border: 1px solid rgba(226, 232, 240, 0.18);
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.07);
-    }
-    .trust-item strong {
-      display: block;
-      color: #ffffff;
-      font-size: 14px;
-    }
-    .trust-item span {
-      display: block;
-      margin-top: 6px;
-      color: #cbd5e1;
-      font-size: 12px;
-      line-height: 1.45;
-    }
-    .decision {
-      border-left: 1px solid var(--line);
-      background: #effdf5;
-    }
-    .button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 44px;
-      padding: 0 16px;
-      border-radius: 6px;
-      color: #ffffff;
-      background: var(--signal);
-      text-decoration: none;
-      font-weight: 700;
-      margin-top: 16px;
-    }
-    .button:hover { background: #4ade80; color: #052e16; }
-    @media (max-width: 760px) {
-      .grid { grid-template-columns: 1fr; }
-      .trust-ribbon { grid-template-columns: 1fr; }
-    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
   </style>
 </head>
 <body>
-  <main>
-    <header>
-      <span class="pill">公开展示仓库</span>
-      <h1>ShareGuard 影像信任工作台</h1>
-      <p>面向媒体发布、品牌舆情和平台人工复核，把疑似 AI 影像转成可归档、可复核、可交付的风险报告。此公开演示不包含模型权重、训练数据或核心推理实现。</p>
-      <div class="trust-ribbon" aria-label="ShareGuard可信交付能力">
-        <div class="trust-item"><strong>证据链完整</strong><span>原图、压缩、截图、转发、拼贴并列复核。</span></div>
-        <div class="trust-item"><strong>私有模型API</strong><span>公开仓库只展示产品闭环，真实能力通过受控服务交付。</span></div>
-        <div class="trust-item"><strong>报告可归档</strong><span>处置建议、编号、时间和复核记录可交给业务团队。</span></div>
-      </div>
-      <a class="button" href="./index.html">查看静态演示</a>
+  <div class="public-dossier">
+    <header class="public-bar">
+      <a class="brand" href="#case"><span class="mark">SG</span><span><strong>ShareGuard</strong><small>PUBLIC DOSSIER</small></span></a>
+      <span class="status"><i aria-hidden="true"></i>公开展示仓库 / 模型隔离边界生效</span>
+      <a href="#access">查看产品边界</a>
     </header>
-    <section class="decision">
-      <h2>默认旗舰案例：品牌舆情澄清</h2>
-      <p>演示重点不是先报分数，而是先给处置建议：建议暂缓公开使用，进入人工复核。随后展示传播链路视图、证据摘要和报告导出。</p>
-    </section>
-    <section>
-      <h2>三类落地场景</h2>
-      <div class="grid">
-        <p><strong>媒体发布前核验</strong><br>为新闻、校园媒体和内容团队提供发布前可信初筛。</p>
-        <p><strong>品牌舆情澄清</strong><br>为公关、法务和合规团队生成可转交的复核摘要。</p>
-        <p><strong>平台人工复核</strong><br>为审核队列提供风险等级、置信度和下一步动作。</p>
-      </div>
-    </section>
-    <section>
-      <h2>技术保护原则</h2>
-      <p>公开仓库展示产品壳和 API 协议；真实模型通过私有 API 或客户本地部署接入。页面中的 `static-demo` 只用于展示业务闭环，不代表公开模型能力。</p>
-    </section>
-  </main>
+
+    <main class="public-main" id="case">
+      <section class="evidence">
+        <header class="register">
+          <div><span>CASE #SG-PUBLIC-01</span><h1>影像发布风险决策案宗</h1></div>
+          <small>公开页面只展示产品闭环，不包含模型权重、训练数据或核心推理实现。</small>
+        </header>
+        <div class="brief"><span>EVENT BRIEFING</span><p>ShareGuard 面向媒体、品牌舆情与平台人工复核，把来源不明影像转化为可执行、可归档的发布决策。</p></div>
+        <div class="evidence-visual" role="img" aria-label="ShareGuard影像证据透写台概念预览">
+          <div class="visual-copy"><strong>证据先于传播</strong><span>IMAGE / PROVENANCE / HUMAN AUTHORITY</span></div>
+          <div class="visual-register"><span>CONTROLLED PREVIEW</span><span>NO PRIVATE INFERENCE</span></div>
+        </div>
+        <div class="trust-row">
+          <div><strong>证据链完整</strong><span>传播版本、处置动作与复核意见统一归档。</span></div>
+          <div><strong>私有模型 API</strong><span>核心能力由受控服务或客户本地环境交付。</span></div>
+          <div><strong>报告可保全</strong><span>案卷编号、时间与人工覆盖行为可追踪。</span></div>
+        </div>
+      </section>
+
+      <aside class="decision">
+        <span>ACTION REQUIRED</span>
+        <h2>SUSPEND<em>暂缓发布</em></h2>
+        <section><h3>业务结论</h3><p>先暂停传播，再取得原始素材并进入人工复核。公开展示中的结论属于产品流程示例。</p></section>
+        <section id="access"><h3>三类落地场景</h3><div class="scenarios"><p><strong>媒体发布前核验</strong><br>为编辑部提供发布前可信初筛。</p><p><strong>品牌舆情澄清</strong><br>为公关与法务生成复核摘要。</p><p><strong>平台人工复核</strong><br>为审核队列提供明确的下一步动作。</p></div></section>
+        <section><h3>技术保护原则</h3><p>公开层只包含界面、产品协议和静态演示数据。真实检测能力始终位于私有边界之后。</p></section>
+        <a class="access" href="../shareguard/platform/static/index.html">进入完整工作台</a>
+      </aside>
+    </main>
+
+    <footer><span>SHAREGUARD / PUBLIC PRODUCT SURFACE</span><span>TECHNICAL ASSISTANCE / NOT FORENSIC CERTIFICATION</span></footer>
+  </div>
 </body>
 </html>
