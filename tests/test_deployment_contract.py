@@ -96,6 +96,16 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("XDG_CACHE_HOME=/cache", text)
         self.assertNotIn("COPY model_artifacts", text)
 
+    def test_dockerfile_installs_dependencies_in_virtualenv(self):
+        text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "python -m venv --system-site-packages /opt/venv",
+            text,
+        )
+        self.assertIn("ENV PATH=/opt/venv/bin:$PATH", text)
+        self.assertNotIn("RUN pip install", text)
+
     def test_dockerignore_excludes_private_artifacts_and_secrets(self):
         text = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 

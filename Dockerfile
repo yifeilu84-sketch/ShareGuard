@@ -10,22 +10,27 @@ ENV XDG_CACHE_HOME=/cache
 ENV HF_HOME=/cache/huggingface
 ENV TORCH_HOME=/cache/torch
 ENV PORT=7860
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
+RUN python -m venv --system-site-packages /opt/venv
+
 COPY requirements-platform.txt /app/requirements-platform.txt
-RUN pip install --no-cache-dir -r /app/requirements-platform.txt
+RUN python -m pip install --no-cache-dir -r /app/requirements-platform.txt
 
 COPY setup.py README.md /app/
 COPY shareguard /app/shareguard
 COPY scripts/run_platform.py /app/scripts/run_platform.py
 
-RUN pip install --no-cache-dir -e .
+RUN python -m pip install --no-cache-dir -e .
 
 RUN groupadd --system shareguard \
     && useradd --system --gid shareguard --create-home --home-dir /home/shareguard shareguard \
