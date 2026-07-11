@@ -7,6 +7,7 @@ from pathlib import Path
 import uuid
 from urllib import request
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from PIL import Image, ImageStat
@@ -19,6 +20,12 @@ class DetectorBackend(Protocol):
 
     def analyze(self, image: Image.Image, filename: str = "image") -> "DetectionResult":
         """Analyze one image and return a normalized detection result."""
+
+    def warmup(self) -> None:
+        """Load inference resources before readiness is advertised."""
+
+    def is_ready(self) -> bool:
+        """Return whether the backend can accept inference work."""
 
 
 @dataclass
@@ -80,6 +87,12 @@ class MockDetectorBackend:
 
     name = "mock"
 
+    def warmup(self) -> None:
+        return None
+
+    def is_ready(self) -> bool:
+        return True
+
     def analyze(self, image: Image.Image, filename: str = "image") -> DetectionResult:
         rgb = image.convert("RGB")
         gray = rgb.convert("L")
@@ -137,6 +150,12 @@ class ShareGuardDetectorBackend:
         self._detector = Detector(str(path), device=self.device)
         return self._detector
 
+    def warmup(self) -> None:
+        self._load_detector()
+
+    def is_ready(self) -> bool:
+        return self._detector is not None
+
     def analyze(self, image: Image.Image, filename: str = "image") -> DetectionResult:
         rgb = image.convert("RGB")
         detector = self._load_detector()
@@ -170,10 +189,37 @@ class RemoteDetectorBackend:
 
     name = "remote"
 
-    def __init__(self, endpoint_url: str, token: Optional[str] = None, timeout: float = 120.0):
+    def __init__(
+        self,
+        endpoint_url: str,
+        token: Optional[str] = None,
+        timeout: float = 120.0,
+        health_url: Optional[str] = None,
+    ):
         self.endpoint_url = endpoint_url
         self.token = token
         self.timeout = timeout
+        self.health_url = health_url or self._derive_health_url(endpoint_url)
+        self._ready = False
+
+    def warmup(self) -> None:
+        headers = {"Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        req = request.Request(self.health_url, headers=headers, method="GET")
+        try:
+            with request.urlopen(req, timeout=min(self.timeout, 10.0)) as response:
+                body = response.read()
+                payload = json.loads(body.decode("utf-8")) if body else {}
+            if payload and payload.get("status") not in {"ok", "ready"}:
+                raise ValueError("remote detector is not ready")
+        except Exception:
+            self._ready = False
+            raise RuntimeError("Remote detector readiness check failed") from None
+        self._ready = True
+
+    def is_ready(self) -> bool:
+        return self._ready
 
     def analyze(self, image: Image.Image, filename: str = "image") -> DetectionResult:
         rgb = image.convert("RGB")
@@ -194,12 +240,26 @@ class RemoteDetectorBackend:
             with request.urlopen(req, timeout=self.timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Remote detector HTTP {exc.code}: {detail}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"Remote detector connection failed: {exc.reason}") from exc
+            self._ready = False
+            raise RuntimeError(f"Remote detector HTTP {exc.code}") from None
+        except (URLError, OSError, ValueError):
+            self._ready = False
+            raise RuntimeError("Remote detector request failed") from None
 
+        self._ready = True
         return self._result_from_payload(payload, filename, rgb)
+
+    @staticmethod
+    def _derive_health_url(endpoint_url: str) -> str:
+        parts = urlsplit(endpoint_url)
+        path = parts.path.rstrip("/")
+        for suffix in ("/api/analyze", "/v1/analyze"):
+            if path.endswith(suffix):
+                path = path[: -len(suffix)] + "/v1/ready"
+                break
+        else:
+            path += "/v1/ready"
+        return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
     def _multipart_body(self, image: Image.Image, filename: str):
         boundary = f"----shareguard-{uuid.uuid4().hex}"

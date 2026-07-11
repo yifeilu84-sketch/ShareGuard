@@ -16,12 +16,29 @@ data/degraded_test/
 data/feature_cache/
 *.pt
 *.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+*.pkl
+*.joblib
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.sha256
 *.npy
 *.npz
+data/manifests/*.csv
 
 # Outputs
 /output/
 /outputs/
+reports/
+mlruns/
+runs/
+checkpoints/
+models/
 outputs/checkpoints/
 outputs/logs/
 outputs/figures/
@@ -53,6 +70,13 @@ wandb/
 # Temporary
 *.tmp
 *.log
+.env
+.env.*
+*.env
+secrets/
+credentials*/
+*.key
+*.pem
 .playwright-cli/
 platform_stdout.log
 platform_stderr.log

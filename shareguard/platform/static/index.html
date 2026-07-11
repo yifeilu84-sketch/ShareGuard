@@ -3,30 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ShareGuard影像鉴真</title>
+  <title>ShareGuard影像信任工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%231f66d1'/%3E%3Cpath d='M12 4l6 2.5V11c0 4-2.4 7-6 8.7C8.4 18 6 15 6 11V6.5L12 4z' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M8.6 12.1l2.1 2.1 4.7-5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
   <style>
     :root {
-      --bg: #f6f8fb;
+      --bg: #f8fafc;
       --surface: #ffffff;
-      --surface-soft: #f0f4f8;
-      --ink: #182230;
-      --muted: #667085;
-      --line: #d6deea;
-      --blue: #1f66d1;
-      --blue-dark: #174ea6;
-      --teal: #08756f;
-      --green: #247348;
-      --amber: #9a6500;
-      --red: #b2363b;
-      --shadow: 0 12px 30px rgba(24, 34, 48, 0.08);
+      --surface-soft: #f1f5f9;
+      --ink: #020617;
+      --muted: #475569;
+      --line: #d7dee8;
+      --navy: #0f172a;
+      --slate: #334155;
+      --blue: #0369a1;
+      --blue-dark: #075985;
+      --cta: #0369a1;
+      --teal: #0f766e;
+      --green: #166534;
+      --amber: #92400e;
+      --red: #b42318;
+      --shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+      --focus: 0 0 0 3px rgba(3, 105, 161, 0.22);
       font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       color: var(--ink);
-      background: var(--bg);
+      background:
+        linear-gradient(180deg, #edf5fb 0, var(--bg) 255px),
+        var(--bg);
     }
     button, input { font: inherit; }
     button {
@@ -89,6 +95,12 @@
       color: #344054;
       font-size: 13px;
       white-space: nowrap;
+    }
+    .mode-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      max-width: 280px;
     }
     .dot {
       width: 8px;
@@ -245,7 +257,7 @@
       margin-bottom: 14px;
       padding: 12px;
       border: 1px solid var(--line);
-      border-left: 3px solid var(--teal);
+      border-left: 1px solid var(--line);
       border-radius: 8px;
       background: #f8fafc;
       font-size: 13px;
@@ -357,6 +369,33 @@
       gap: 12px;
       margin-bottom: 14px;
     }
+    .decision-card {
+      position: sticky;
+      top: 12px;
+      z-index: 2;
+      padding: 14px;
+      border: 1px solid #bed0eb;
+      border-radius: 8px;
+      background: #f8fbff;
+      margin-bottom: 14px;
+    }
+    .decision-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .decision-heading h3 {
+      margin: 0;
+      font-size: 15px;
+    }
+    .decision-action {
+      margin: 0;
+      color: #24364b;
+      line-height: 1.55;
+      font-size: 14px;
+    }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -421,7 +460,7 @@
       margin: 14px 0;
     }
     .report-section {
-      border-left: 3px solid var(--blue);
+      border-left: 1px solid var(--line);
       background: #f8fafc;
       padding: 10px 12px;
     }
@@ -450,6 +489,18 @@
       gap: 10px;
       margin-top: 14px;
     }
+    .report-actions {
+      margin: 12px 0 0;
+    }
+    .evidence-note {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #eef8f1;
+      color: #16422a;
+      font-size: 13px;
+      line-height: 1.5;
+    }
     .error {
       color: var(--red);
       background: #fff1f1;
@@ -457,6 +508,247 @@
       border-radius: 8px;
       padding: 12px;
       line-height: 1.5;
+    }
+    .app-shell {
+      width: min(1480px, 100%);
+      margin: 0 auto;
+      padding: 14px min(3vw, 34px) 30px;
+    }
+    .topbar {
+      padding: 14px 18px;
+      border: 1px solid rgba(215, 222, 232, 0.9);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+    }
+    .mark {
+      background: var(--navy);
+    }
+    .engine {
+      border-color: #cbd5e1;
+      background: #f8fafc;
+      color: var(--slate);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.75);
+    }
+    .dot {
+      background: var(--teal);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+    }
+    .market-strip {
+      grid-template-columns: minmax(360px, 1.08fr) minmax(520px, 1fr);
+      padding: 16px 0 0;
+    }
+    .hero-panel {
+      min-height: 244px;
+      padding: 24px;
+      border: 1px solid rgba(30, 41, 59, 0.92);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96)),
+        var(--navy);
+      color: #ffffff;
+      box-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+    }
+    .hero-panel .eyebrow {
+      color: #dbeafe;
+      background: rgba(219, 234, 254, 0.12);
+      border: 1px solid rgba(219, 234, 254, 0.18);
+    }
+    .hero-panel h2 {
+      max-width: 660px;
+      margin: 12px 0 10px;
+      color: #ffffff;
+      font-size: 26px;
+      line-height: 1.18;
+    }
+    .hero-panel p {
+      max-width: 720px;
+      color: #cbd5e1;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    .trust-ribbon {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .trust-item {
+      min-height: 86px;
+      padding: 12px;
+      border: 1px solid rgba(226, 232, 240, 0.18);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .trust-item strong {
+      display: block;
+      color: #ffffff;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+    .trust-item span {
+      display: block;
+      margin-top: 6px;
+      color: #cbd5e1;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .market-metrics {
+      box-shadow: none;
+      border-color: #d7dee8;
+      background: #ffffff;
+    }
+    .metric {
+      padding: 22px 20px;
+      background: #ffffff;
+    }
+    .metric strong {
+      color: var(--navy);
+      font-size: 20px;
+    }
+    main {
+      padding: 16px 0 0;
+      grid-template-columns: minmax(280px, 360px) minmax(440px, 1fr) minmax(330px, 410px);
+    }
+    .panel {
+      box-shadow: none;
+      border-color: #d7dee8;
+    }
+    .panel-header {
+      background: #fbfdff;
+    }
+    .dropzone {
+      background: #f8fafc;
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+    .dropzone:hover {
+      border-color: var(--cta);
+      background: #f0f7fb;
+    }
+    .case-button {
+      transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    }
+    .case-button:hover,
+    .case-button.active {
+      border-color: var(--cta);
+      background: #f0f7fb;
+      box-shadow: inset 0 0 0 1px rgba(3, 105, 161, 0.2);
+    }
+    .case-button:active,
+    .primary:active,
+    .ghost:active {
+      transform: translateY(1px);
+    }
+    .case-context {
+      border-left: 1px solid var(--line);
+      background: #f8fafc;
+    }
+    .primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: var(--cta);
+      box-shadow: none;
+      transition: background 160ms ease, transform 160ms ease;
+    }
+    .primary:hover {
+      background: var(--blue-dark);
+      box-shadow: none;
+    }
+    .ghost {
+      transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+    }
+    .ghost:hover {
+      border-color: var(--cta);
+      background: #f0f7fb;
+      color: var(--blue-dark);
+    }
+    .view-tile {
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+      transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+    }
+    .view-tile:hover {
+      border-color: #b9c8d8;
+      transform: translateY(-1px);
+      box-shadow: 0 10px 20px rgba(15, 23, 42, 0.07);
+    }
+    .placeholder-img,
+    .view-tile img {
+      background: #eef3f8;
+    }
+    .decision-card {
+      border-color: #bfdbfe;
+      background:
+        linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+    }
+    .decision-heading h3 {
+      color: var(--navy);
+      font-size: 16px;
+    }
+    .decision-action {
+      color: var(--slate);
+    }
+    .score-block {
+      background: #f8fafc;
+    }
+    .score-fill {
+      background: var(--cta);
+    }
+    .score-number {
+      color: var(--navy);
+      font-size: 40px;
+    }
+    .business-context {
+      border-color: #c7d2fe;
+      background: #f5f7ff;
+      color: #1e293b;
+    }
+    .report-section {
+      border-left: 1px solid var(--line);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+    .evidence-note {
+      border: 1px solid #bbf7d0;
+      background: #f0fdf4;
+      color: #14532d;
+    }
+    .report-empty {
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+    .loading-skeleton {
+      min-height: 300px;
+      display: grid;
+      align-content: center;
+      gap: 12px;
+      padding: 18px;
+      border: 1px solid #d7dee8;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+    .loading-skeleton span {
+      height: 14px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #e2e8f0, #f8fafc, #e2e8f0);
+      background-size: 220% 100%;
+      animation: pulse 1200ms ease-in-out infinite;
+    }
+    .loading-skeleton span:nth-child(1) { width: 64%; height: 28px; }
+    .loading-skeleton span:nth-child(2) { width: 88%; }
+    .loading-skeleton span:nth-child(3) { width: 76%; }
+    .loading-skeleton p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+    @keyframes pulse {
+      from { background-position: 180% 0; }
+      to { background-position: -40% 0; }
     }
     @media (max-width: 1180px) {
       .market-strip { grid-template-columns: 1fr; }
@@ -472,102 +764,1577 @@
       .view-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 480px) {
-      main { padding-inline: 12px; }
+      .app-shell { padding-inline: 12px; }
+      main { padding-inline: 0; }
       .view-grid { grid-template-columns: 1fr; }
       .actions { grid-template-columns: 1fr; }
       .report-dl, .meta-list { grid-template-columns: 1fr; }
     }
+    @media (max-width: 680px) {
+      .trust-ribbon { grid-template-columns: 1fr; }
+      .hero-panel { padding: 18px; }
+      .hero-panel h2 { font-size: 22px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+    /* V2 visual reset: product cockpit, not presentation cards. */
+    :root {
+      --frame: #080d13;
+      --frame-2: #101820;
+      --signal: #22c55e;
+      --signal-dark: #15803d;
+      --panel-line: #dbe3ee;
+      --panel-soft: #f4f7fb;
+      --panel-ink: #111827;
+      --quiet: #5d6b7c;
+    }
+    body {
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, #0b1117 0, #101820 320px, #eef3f8 321px, #f7fafc 100%);
+    }
+    button:focus-visible,
+    input:focus-visible {
+      outline: none;
+      box-shadow: var(--focus);
+    }
+    .app-shell {
+      width: min(1520px, 100%);
+      padding: 18px min(2vw, 28px) 36px;
+    }
+    .topbar {
+      min-height: 82px;
+      padding: 14px 18px;
+      color: #e5edf7;
+      background: rgba(15, 23, 31, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      box-shadow: none;
+    }
+    .brand h1 {
+      color: #f8fafc;
+      font-size: 21px;
+    }
+    .brand p,
+    .mode-note {
+      color: #b7c4d4;
+    }
+    .mark {
+      width: 42px;
+      height: 42px;
+      color: #0b1117;
+      background: var(--signal);
+    }
+    .engine {
+      justify-content: flex-start;
+      min-width: 300px;
+      color: #eaf2fb;
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(226, 232, 240, 0.18);
+      box-shadow: none;
+    }
+    .dot {
+      background: var(--signal);
+      box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.13);
+    }
+    .market-strip {
+      gap: 12px;
+      padding: 12px;
+      margin-top: 14px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 10px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 44%),
+        #0b1117;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+    }
+    .hero-panel {
+      min-height: 224px;
+      padding: 22px;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .hero-panel .eyebrow {
+      color: #d1fae5;
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.28);
+    }
+    .hero-panel h2 {
+      max-width: 760px;
+      margin: 14px 0 10px;
+      color: #ffffff;
+      font-size: 30px;
+      line-height: 1.18;
+      text-wrap: balance;
+    }
+    .hero-panel p {
+      max-width: 760px;
+      color: #c9d6e4;
+      font-size: 15px;
+      line-height: 1.65;
+      text-wrap: pretty;
+    }
+    .trust-ribbon {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-top: 20px;
+    }
+    .trust-item {
+      min-height: 82px;
+      background: rgba(255, 255, 255, 0.075);
+      border-color: rgba(226, 232, 240, 0.14);
+    }
+    .trust-item strong {
+      color: #ffffff;
+      font-size: 15px;
+    }
+    .trust-item span {
+      color: #b8c5d4;
+    }
+    .market-metrics {
+      grid-template-columns: 1fr;
+      border: 1px solid rgba(226, 232, 240, 0.12);
+      background: rgba(255, 255, 255, 0.055);
+      overflow: hidden;
+    }
+    .metric {
+      padding: 20px 22px;
+      border-left: 0;
+      border-top: 1px solid rgba(226, 232, 240, 0.12);
+      background: transparent;
+    }
+    .metric:first-child {
+      border-top: 0;
+    }
+    .metric strong {
+      color: #f8fafc;
+      font-size: 19px;
+    }
+    .metric span {
+      color: #bdcad9;
+      max-width: 38ch;
+    }
+    main {
+      gap: 12px;
+      padding-top: 14px;
+      grid-template-columns: minmax(260px, 330px) minmax(500px, 1fr) minmax(330px, 390px);
+    }
+    .panel {
+      border-color: var(--panel-line);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: none;
+    }
+    .panel-header {
+      min-height: 72px;
+      padding: 15px 18px 12px;
+      background: #ffffff;
+    }
+    .panel-header h2 {
+      color: var(--panel-ink);
+      font-size: 17px;
+    }
+    .panel-header p {
+      color: var(--quiet);
+    }
+    .panel-body {
+      padding: 16px;
+    }
+    .case-picker {
+      gap: 8px;
+    }
+    .case-button {
+      min-height: 68px;
+      padding: 12px 13px;
+      background: #ffffff;
+      border-color: #dce4ef;
+      transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+    .case-button:hover {
+      background: #f7fbff;
+      border-color: #b7c7d8;
+    }
+    .case-button.active {
+      color: #052e16;
+      background: #effdf5;
+      border-color: #86efac;
+      box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.24);
+    }
+    .case-button span {
+      color: #64748b;
+    }
+    .case-button.active span {
+      color: #166534;
+    }
+    .case-context {
+      padding: 14px;
+      background: #f8fafc;
+      border-color: #dce4ef;
+    }
+    .dropzone {
+      min-height: 102px;
+      background: #f8fafc;
+      border-color: #b8c4d2;
+    }
+    .dropzone:hover {
+      background: #effdf5;
+      border-color: var(--signal);
+    }
+    .primary {
+      min-height: 48px;
+      color: #052e16;
+      background: var(--signal);
+      box-shadow: none;
+    }
+    .primary:hover {
+      background: #4ade80;
+      box-shadow: none;
+    }
+    .source-preview {
+      margin-top: 14px;
+      border-color: #dce4ef;
+    }
+    .source-preview img {
+      aspect-ratio: 16 / 10;
+      background: #eef3f8;
+    }
+    .view-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      grid-auto-flow: dense;
+    }
+    .view-tile {
+      grid-column: span 2;
+      background: #ffffff;
+      border-color: #dce4ef;
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+    .view-tile:first-child,
+    .view-tile:nth-child(2) {
+      grid-column: span 3;
+    }
+    .view-tile:hover {
+      transform: none;
+      border-color: #9fb2c7;
+      box-shadow: none;
+    }
+    .view-tile img,
+    .placeholder-img {
+      background: #eef3f8;
+    }
+    .view-caption {
+      min-height: 46px;
+      padding: 10px 11px;
+      background: #ffffff;
+    }
+    .view-caption strong {
+      color: var(--panel-ink);
+      font-size: 13px;
+    }
+    .decision-card {
+      color: #e5edf7;
+      border-color: rgba(15, 23, 42, 0.95);
+      background:
+        linear-gradient(180deg, rgba(23, 32, 43, 0.98), rgba(11, 17, 23, 0.98));
+      box-shadow: none;
+    }
+    .decision-heading h3,
+    .score-number {
+      color: #ffffff;
+    }
+    .decision-action {
+      color: #d7e1ed;
+    }
+    .score-block {
+      border-color: rgba(226, 232, 240, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .score-line {
+      height: 8px;
+      background: rgba(226, 232, 240, 0.16);
+    }
+    .score-fill {
+      background: var(--signal);
+    }
+    .badge.medium {
+      color: #451a03;
+      background: #fed7aa;
+    }
+    .badge.high {
+      color: #450a0a;
+      background: #fecaca;
+    }
+    .badge.low {
+      color: #052e16;
+      background: #bbf7d0;
+    }
+    .badge.uncertain {
+      color: #111827;
+      background: #e5e7eb;
+    }
+    .decision-card .ghost {
+      color: #052e16;
+      background: #f8fafc;
+      border-color: #e5edf7;
+    }
+    .decision-card .ghost:hover {
+      color: #052e16;
+      background: #dcfce7;
+      border-color: #86efac;
+    }
+    .business-context {
+      background: #f8fafc;
+      border-color: #dce4ef;
+      color: #182230;
+    }
+    .evidence-note {
+      background: #effdf5;
+      border-color: #bbf7d0;
+      color: #14532d;
+    }
+    .report-section {
+      border-color: #dce4ef;
+      background: #ffffff;
+    }
+    .notes {
+      color: #475569;
+    }
+    .loading-skeleton {
+      background: #f8fafc;
+      border-color: #dce4ef;
+    }
+    .loading-skeleton span {
+      background: linear-gradient(90deg, #e2e8f0, #f8fafc, #e2e8f0);
+    }
+    @media (max-width: 1260px) {
+      main {
+        grid-template-columns: minmax(260px, 330px) minmax(480px, 1fr);
+      }
+      .report-panel {
+        grid-column: 1 / -1;
+      }
+    }
+    @media (max-width: 920px) {
+      body {
+        background: linear-gradient(180deg, #0b1117 0, #101820 520px, #eef3f8 521px, #f7fafc 100%);
+      }
+      .market-strip,
+      main {
+        grid-template-columns: 1fr;
+      }
+      .market-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .metric {
+        border-top: 0;
+        border-left: 1px solid rgba(226, 232, 240, 0.12);
+      }
+      .metric:first-child {
+        border-left: 0;
+      }
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .engine {
+        min-width: 0;
+        width: 100%;
+      }
+    }
+    @media (max-width: 640px) {
+      .app-shell {
+        padding: 12px;
+      }
+      .market-strip {
+        padding: 10px;
+      }
+      .hero-panel {
+        padding: 16px;
+      }
+      .hero-panel h2 {
+        font-size: 24px;
+      }
+      .trust-ribbon,
+      .market-metrics,
+      .view-grid {
+        grid-template-columns: 1fr;
+      }
+      .metric {
+        border-left: 0;
+        border-top: 1px solid rgba(226, 232, 240, 0.12);
+      }
+      .metric:first-child {
+        border-top: 0;
+      }
+      .view-tile,
+      .view-tile:first-child,
+      .view-tile:nth-child(2) {
+        grid-column: auto;
+      }
+    }
+
+    /* V3 editorial forensics: approved Figma direction translated to product UI. */
+    :root {
+      --paper: #f3f5f6;
+      --paper-bright: #f8f9f9;
+      --carbon: #090d10;
+      --carbon-soft: #11161b;
+      --editorial-ink: #101214;
+      --editorial-muted: #5b6572;
+      --hairline: #d8dde2;
+      --acid: #c8ff3d;
+      --acid-deep: #92c900;
+      --hold: #d94747;
+      --review: #d49300;
+      --allow: #198754;
+      --ui-radius: 6px;
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      min-height: 100vh;
+      color: var(--editorial-ink);
+      background: var(--paper);
+    }
+    button,
+    a { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--acid-deep);
+      outline-offset: 3px;
+      box-shadow: none;
+    }
+    .app-shell {
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      padding: 0;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      min-height: 68px;
+      padding: 0 max(28px, calc((100vw - 1320px) / 2));
+      color: var(--editorial-ink);
+      background: rgba(248, 249, 249, 0.94);
+      border: 0;
+      border-bottom: 1px solid var(--hairline);
+      border-radius: 0;
+      box-shadow: none;
+      backdrop-filter: blur(14px);
+    }
+    .brand {
+      grid-column: 1;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      color: var(--editorial-ink);
+      text-decoration: none;
+    }
+    .brand h1 {
+      color: var(--editorial-ink);
+      font-size: 17px;
+      font-weight: 750;
+      line-height: 1;
+    }
+    .brand p { display: none; }
+    .mark {
+      position: relative;
+      display: block;
+      width: 20px;
+      height: 20px;
+      color: var(--carbon);
+      background: var(--carbon);
+      border-radius: 4px;
+    }
+    .mark span {
+      position: absolute;
+      left: 5px;
+      width: 10px;
+      height: 2px;
+      background: var(--acid);
+    }
+    .mark span:first-child { top: 6px; }
+    .mark span:last-child { top: 11px; width: 7px; }
+    .runtime-status {
+      grid-column: 2;
+      grid-row: 1;
+      justify-self: center;
+      min-width: 0;
+    }
+    .engine {
+      min-width: 0;
+      max-width: 320px;
+      min-height: 32px;
+      padding: 0 10px;
+      overflow: hidden;
+      color: var(--editorial-muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      box-shadow: none;
+      font-size: 11px;
+    }
+    .engine span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      background: var(--acid-deep);
+      box-shadow: none;
+    }
+    .mode-note { display: none; }
+    .topnav {
+      grid-column: 3;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 28px;
+    }
+    .topnav a {
+      color: var(--editorial-muted);
+      font-size: 13px;
+      text-decoration: none;
+      white-space: nowrap;
+      transition: color 160ms ease;
+    }
+    .topnav a:hover { color: var(--editorial-ink); }
+    .nav-action {
+      min-width: 106px;
+      min-height: 44px;
+      padding: 0 18px;
+      color: #f7f9fa;
+      background: var(--carbon);
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .nav-action:hover { background: #232a30; }
+    .product-main {
+      display: block;
+      padding: 0;
+    }
+    .entry-layout {
+      display: grid;
+      grid-template-columns: minmax(430px, 0.82fr) minmax(620px, 1.18fr);
+      gap: 56px;
+      align-items: center;
+      width: min(1320px, 100%);
+      min-height: 720px;
+      margin: 0 auto;
+      padding: 38px 28px 34px;
+    }
+    .hero-panel {
+      min-height: 0;
+      padding: 4px 0;
+      color: var(--editorial-ink);
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .hero-panel .eyebrow {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 0 0 20px;
+      color: var(--editorial-muted);
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      font-size: 11px;
+      font-weight: 750;
+    }
+    .hero-panel .eyebrow::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      background: var(--acid);
+    }
+    .hero-panel .hero-title {
+      margin: 24px 0 0;
+      color: var(--editorial-ink);
+      font-size: 64px;
+      font-weight: 400;
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+    .hero-title span { display: block; }
+    .hero-panel .hero-subtitle {
+      margin: 28px 0 0;
+      color: var(--editorial-ink);
+      font-size: 29px;
+      font-weight: 400;
+      line-height: 1.3;
+    }
+    .hero-panel .hero-copy {
+      max-width: 430px;
+      margin: 16px 0 0;
+      color: var(--editorial-muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+    .scenario-label {
+      margin-top: 26px;
+      color: var(--editorial-muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .case-picker {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0;
+      margin: 8px 0 0;
+      border-top: 1px solid var(--hairline);
+      border-bottom: 1px solid var(--hairline);
+    }
+    .case-button {
+      min-width: 0;
+      min-height: 54px;
+      padding: 9px 10px;
+      color: var(--editorial-muted);
+      background: transparent;
+      border: 0;
+      border-left: 1px solid var(--hairline);
+      border-radius: 0;
+      box-shadow: none;
+      text-align: left;
+      transition: color 160ms ease, background 160ms ease;
+    }
+    .case-button:first-child { border-left: 0; }
+    .case-button strong {
+      display: block;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.35;
+    }
+    .case-button span { display: none; }
+    .case-button:hover { color: var(--editorial-ink); background: #eceff1; }
+    .case-button.active {
+      color: var(--editorial-ink);
+      background: #e7ebed;
+      border-color: var(--hairline);
+      box-shadow: inset 0 -3px 0 var(--acid-deep);
+    }
+    .case-context {
+      min-height: 66px;
+      margin: 10px 0 0;
+      padding: 10px 0;
+      color: var(--editorial-muted);
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--hairline);
+      border-radius: 0;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .case-context strong {
+      margin-bottom: 3px;
+      color: var(--editorial-ink);
+      font-size: 13px;
+    }
+    .case-context dl { display: none; }
+    .upload-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 150px;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .dropzone {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 56px;
+      padding: 8px 14px;
+      background: var(--paper-bright);
+      border: 1px solid #b8c0c7;
+      border-radius: 4px;
+    }
+    .dropzone:hover {
+      background: #f7faef;
+      border-color: var(--acid-deep);
+    }
+    .dropzone strong {
+      margin: 0;
+      color: var(--editorial-ink);
+      font-size: 13px;
+    }
+    .dropzone span {
+      margin-top: 2px;
+      color: var(--editorial-muted);
+      font-size: 10px;
+    }
+    .primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 56px;
+      margin: 0;
+      color: #f7f9fa;
+      background: var(--carbon);
+      border-radius: 4px;
+      box-shadow: none;
+      font-size: 13px;
+    }
+    .primary:hover {
+      color: var(--carbon);
+      background: var(--acid);
+      box-shadow: none;
+    }
+    .primary:disabled {
+      color: #75808a;
+      background: #dfe3e6;
+      opacity: 1;
+    }
+    .source-preview {
+      display: none;
+      margin-top: 8px;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      overflow: visible;
+    }
+    .meta-list {
+      display: grid;
+      grid-template-columns: 1.6fr 0.7fr 0.7fr;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      font-size: 10px;
+    }
+    .meta-list div { min-width: 0; }
+    .meta-list dt {
+      color: #8a949f;
+      font-size: 9px;
+    }
+    .meta-list dd {
+      margin: 1px 0 0;
+      overflow: hidden;
+      color: var(--editorial-muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .trust-ribbon {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0;
+      margin-top: 20px;
+      border-top: 1px solid var(--hairline);
+    }
+    .trust-item {
+      min-height: 48px;
+      padding: 10px 10px 0;
+      color: var(--editorial-ink);
+      background: transparent;
+      border: 0;
+      border-left: 1px solid var(--hairline);
+      border-radius: 0;
+    }
+    .trust-item:first-child { padding-left: 0; border-left: 0; }
+    .trust-item strong {
+      color: var(--editorial-ink);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .trust-item span {
+      margin-top: 3px;
+      color: var(--editorial-muted);
+      font-size: 9px;
+      line-height: 1.4;
+    }
+    .evidence-stage {
+      min-width: 0;
+      padding: 18px;
+      color: #f7f9fa;
+      background: var(--carbon);
+      border: 1px solid #20262b;
+      border-radius: var(--ui-radius);
+      box-shadow: 0 22px 48px rgba(16, 18, 20, 0.18);
+    }
+    .stage-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 30px;
+      color: #f7f9fa;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .stage-header b { font-weight: 700; }
+    .stage-header span:last-child { color: var(--acid); }
+    .stage-image-frame {
+      position: relative;
+      overflow: hidden;
+      aspect-ratio: 16 / 9;
+      background: #151b20;
+    }
+    .stage-image-frame > img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center 58%;
+    }
+    .stage-image-frame::before {
+      content: "";
+      position: absolute;
+      z-index: 3;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 1px;
+      background: rgba(200, 255, 61, 0.86);
+      pointer-events: none;
+    }
+    .stage-image-frame::after {
+      content: "";
+      position: absolute;
+      z-index: 2;
+      inset: 22px;
+      border: 1px solid rgba(240, 246, 250, 0.34);
+      pointer-events: none;
+    }
+    .stage-reticle {
+      position: absolute;
+      z-index: 4;
+      inset: 22px;
+      background:
+        linear-gradient(var(--acid), var(--acid)) left top / 34px 2px no-repeat,
+        linear-gradient(var(--acid), var(--acid)) left top / 2px 34px no-repeat,
+        linear-gradient(var(--acid), var(--acid)) right top / 34px 2px no-repeat,
+        linear-gradient(var(--acid), var(--acid)) right top / 2px 34px no-repeat,
+        linear-gradient(var(--acid), var(--acid)) left bottom / 34px 2px no-repeat,
+        linear-gradient(var(--acid), var(--acid)) left bottom / 2px 34px no-repeat,
+        linear-gradient(var(--acid), var(--acid)) right bottom / 34px 2px no-repeat,
+        linear-gradient(var(--acid), var(--acid)) right bottom / 2px 34px no-repeat;
+      pointer-events: none;
+    }
+    .stage-status {
+      position: absolute;
+      z-index: 5;
+      left: 24px;
+      bottom: 24px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 0 12px;
+      color: #f7f9fa;
+      background: rgba(9, 13, 16, 0.88);
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .status-pulse {
+      width: 7px;
+      height: 7px;
+      background: var(--acid);
+      border-radius: 50%;
+    }
+    .view-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .view-tile,
+    .view-tile:first-child,
+    .view-tile:nth-child(2) {
+      grid-column: auto;
+      min-width: 0;
+      min-height: 0;
+      padding: 0;
+      color: #8a949f;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      overflow: visible;
+      box-shadow: none;
+      text-align: left;
+    }
+    .view-tile:hover {
+      color: #dfe5ea;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      transform: none;
+    }
+    .view-tile img,
+    .placeholder-img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      background: #20272d;
+      border: 1px solid transparent;
+    }
+    .placeholder-img {
+      display: grid;
+      place-items: center;
+      color: #65717c;
+      font-size: 9px;
+    }
+    .view-tile.active img,
+    .view-tile.active .placeholder-img {
+      border-color: var(--acid);
+      box-shadow: 0 0 0 1px var(--acid);
+    }
+    .view-caption {
+      display: block;
+      min-height: 0;
+      padding: 5px 0 0;
+      background: transparent;
+      border: 0;
+    }
+    .view-caption strong {
+      display: block;
+      overflow: hidden;
+      color: currentColor;
+      font-size: 9px;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .view-caption span { display: none; }
+    .view-tile.active .view-caption strong { color: var(--acid); }
+    body.is-analyzing .stage-image-frame::before {
+      animation: forensic-scan 1.3s ease-in-out infinite alternate;
+    }
+    body.is-analyzing .status-pulse { animation: status-pulse 900ms ease-in-out infinite; }
+    @keyframes forensic-scan {
+      from { left: 18%; }
+      to { left: 82%; }
+    }
+    @keyframes status-pulse {
+      50% { opacity: 0.35; }
+    }
+    .process-section {
+      width: min(1320px, 100%);
+      margin: 0 auto;
+      padding: 20px 28px 42px;
+      border-top: 1px solid var(--hairline);
+    }
+    .process-copy h2 {
+      margin: 0;
+      color: var(--editorial-ink);
+      font-size: 26px;
+      font-weight: 400;
+      line-height: 1.35;
+    }
+    .process-copy p {
+      max-width: 760px;
+      margin: 8px 0 0;
+      color: var(--editorial-muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+    .process-rail {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin: 28px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .process-rail li {
+      position: relative;
+      min-height: 38px;
+      color: var(--editorial-muted);
+      font-size: 10px;
+    }
+    .process-rail li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 2px;
+      height: 1px;
+      background: var(--hairline);
+    }
+    .process-rail li span {
+      position: absolute;
+      z-index: 2;
+      left: 0;
+      bottom: -2px;
+      width: 9px;
+      height: 9px;
+      background: #aeb6bf;
+      border-radius: 50%;
+    }
+    .process-rail li.active span { background: var(--acid); }
+    .process-rail li.active::before { background: var(--editorial-ink); }
+    .process-rail strong { font-weight: 650; }
+    .result-section {
+      padding: 64px 28px 76px;
+      background: var(--paper-bright);
+      border-top: 1px solid var(--hairline);
+    }
+    .result-shell {
+      display: grid;
+      grid-template-columns: 290px minmax(0, 1fr);
+      gap: 58px;
+      width: min(1320px, 100%);
+      margin: 0 auto;
+    }
+    .result-intro {
+      align-self: start;
+      position: sticky;
+      top: 100px;
+    }
+    .result-kicker {
+      color: var(--hold);
+      font-size: 10px;
+      font-weight: 750;
+    }
+    .result-intro h2 {
+      margin: 14px 0 0;
+      font-size: 46px;
+      font-weight: 400;
+      line-height: 1.08;
+    }
+    .result-intro p {
+      margin: 18px 0 0;
+      color: var(--editorial-muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .decision-legend {
+      display: grid;
+      gap: 10px;
+      margin-top: 28px;
+      color: var(--editorial-muted);
+      font-size: 11px;
+    }
+    .decision-legend span { display: flex; align-items: center; gap: 9px; }
+    .decision-legend i {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+    .decision-legend .allow { background: var(--allow); }
+    .decision-legend .review { background: var(--review); }
+    .decision-legend .hold { background: var(--hold); }
+    .report-panel {
+      min-width: 0;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .report-panel > .panel-header { display: none; }
+    .report-panel > .panel-body { padding: 0; }
+    .report-empty,
+    .loading-skeleton {
+      min-height: 380px;
+      border: 1px solid var(--hairline);
+      border-radius: var(--ui-radius);
+      background: #ffffff;
+    }
+    .decision-card {
+      position: static;
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.65fr);
+      gap: 36px;
+      margin: 0 0 28px;
+      padding: 0 0 30px;
+      color: var(--editorial-ink);
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--hairline);
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .decision-heading {
+      display: block;
+      margin: 0;
+    }
+    .decision-kicker {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--hold);
+      font-size: 10px;
+      font-weight: 750;
+    }
+    .decision-heading h3 {
+      margin: 0;
+      color: var(--editorial-ink);
+      font-size: 50px;
+      font-weight: 400;
+      line-height: 1.05;
+    }
+    .decision-action {
+      max-width: 650px;
+      margin: 14px 0 0;
+      color: var(--editorial-muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .badge {
+      min-height: 26px;
+      margin-top: 14px;
+      padding: 0 9px;
+      border-radius: 3px;
+      font-size: 10px;
+    }
+    .score-block {
+      align-self: stretch;
+      margin: 0;
+      padding: 2px 0 0 32px;
+      color: var(--editorial-muted);
+      background: transparent;
+      border: 0;
+      border-left: 1px solid var(--hairline);
+      border-radius: 0;
+      font-size: 11px;
+    }
+    .score-number {
+      margin-bottom: 10px;
+      color: var(--editorial-ink);
+      font-size: 62px;
+      font-weight: 400;
+      line-height: 1;
+    }
+    .score-line {
+      height: 4px;
+      margin-top: 14px;
+      background: #dce1e5;
+      border-radius: 0;
+    }
+    .score-fill { background: var(--review); }
+    .score-fill.high { background: var(--hold); }
+    .score-fill.medium { background: var(--review); }
+    .score-fill.low { background: var(--allow); }
+    .score-fill.uncertain { background: #7d8790; }
+    .report-actions {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin: 22px 0 0;
+    }
+    .ghost {
+      min-height: 42px;
+      padding: 0 10px;
+      color: var(--editorial-ink);
+      background: transparent;
+      border: 1px solid #b8c0c7;
+      border-radius: 4px;
+      box-shadow: none;
+      font-size: 11px;
+    }
+    .ghost:hover {
+      color: #f7f9fa;
+      background: var(--carbon);
+      border-color: var(--carbon);
+    }
+    .business-context {
+      margin: 0;
+      padding: 16px 0;
+      color: var(--editorial-ink);
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--hairline);
+      border-radius: 0;
+      font-size: 12px;
+    }
+    .business-context strong { font-size: 14px; }
+    .evidence-note {
+      margin: 0;
+      padding: 16px 0;
+      color: var(--editorial-muted);
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--hairline);
+      border-radius: 0;
+      font-size: 12px;
+    }
+    .report-dl {
+      display: grid;
+      grid-template-columns: 90px minmax(0, 1fr) 90px minmax(0, 1fr);
+      gap: 10px 14px;
+      margin: 24px 0 0;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--hairline);
+      font-size: 12px;
+    }
+    .report-dl dt { color: #8a949f; }
+    .report-dl dd { color: var(--editorial-ink); }
+    .report-sections {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 24px;
+      margin: 28px 0 0;
+    }
+    .report-section {
+      padding: 14px 0 0;
+      background: transparent;
+      border: 0;
+      border-top: 2px solid var(--editorial-ink);
+      border-radius: 0;
+    }
+    .report-section strong {
+      color: var(--editorial-ink);
+      font-size: 13px;
+    }
+    .report-section ul {
+      color: var(--editorial-muted);
+      font-size: 11px;
+      line-height: 1.65;
+    }
+    .notes {
+      margin-top: 22px;
+      color: var(--editorial-muted);
+      font-size: 10px;
+    }
+    .proof-section {
+      display: grid;
+      grid-template-columns: minmax(320px, 1.2fr) minmax(430px, 1fr);
+      gap: 0 52px;
+      padding: 44px max(28px, calc((100vw - 1320px) / 2));
+      color: #f7f9fa;
+      background: var(--carbon);
+    }
+    .proof-copy span {
+      color: var(--acid);
+      font-size: 10px;
+      font-weight: 750;
+    }
+    .proof-copy h2 {
+      margin: 13px 0 0;
+      font-size: 24px;
+      font-weight: 400;
+    }
+    .proof-copy p {
+      max-width: 620px;
+      margin: 13px 0 0;
+      color: #a9b4be;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .proof-copy small {
+      display: block;
+      margin-top: 16px;
+      color: #717d87;
+      font-size: 10px;
+    }
+    .model-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-left: 1px solid #293036;
+    }
+    .model-metrics div { padding: 12px 0 12px 30px; }
+    .model-metrics span {
+      display: block;
+      color: #86919b;
+      font-size: 9px;
+      font-weight: 700;
+    }
+    .model-metrics strong {
+      display: block;
+      margin-top: 14px;
+      color: #f7f9fa;
+      font-size: 27px;
+      font-weight: 400;
+    }
+    .proof-section .market-metrics {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-top: 38px;
+      background: transparent;
+      border: 0;
+      border-top: 1px solid #293036;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .proof-section .metric {
+      padding: 18px 20px 0;
+      background: transparent;
+      border: 0;
+      border-left: 1px solid #293036;
+    }
+    .proof-section .metric:first-child { padding-left: 0; border-left: 0; }
+    .proof-section .metric strong {
+      color: #f7f9fa;
+      font-size: 12px;
+    }
+    .proof-section .metric span {
+      margin-top: 7px;
+      color: #8f9aa4;
+      font-size: 10px;
+      line-height: 1.55;
+    }
+    .site-footer {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 28px;
+      align-items: center;
+      min-height: 68px;
+      padding: 0 max(28px, calc((100vw - 1320px) / 2));
+      color: #707b85;
+      background: #070a0c;
+      border-top: 1px solid #1c2227;
+      font-size: 10px;
+    }
+    .site-footer strong { color: #f7f9fa; font-size: 13px; }
+    .site-footer span:last-child { text-align: right; }
+    @media (max-width: 1180px) {
+      .topbar { padding-inline: 24px; }
+      .runtime-status { display: none; }
+      .topnav { grid-column: 2 / 4; }
+      .entry-layout {
+        grid-template-columns: minmax(360px, 0.75fr) minmax(520px, 1.25fr);
+        gap: 32px;
+      }
+      .hero-panel .hero-title { font-size: 54px; }
+      .result-shell { grid-template-columns: 240px minmax(0, 1fr); gap: 34px; }
+      .proof-section { padding-inline: 28px; }
+    }
+    @media (max-width: 920px) {
+      body { background: var(--paper); }
+      .topbar { display: flex; flex-direction: row; align-items: center; }
+      .topnav { margin-left: auto; }
+      .topnav a { display: none; }
+      .entry-layout {
+        grid-template-columns: 1fr;
+        min-height: 0;
+        padding-top: 32px;
+      }
+      .hero-panel { max-width: 650px; }
+      .evidence-stage { width: 100%; }
+      .result-shell { grid-template-columns: 1fr; }
+      .result-intro { position: static; }
+      .result-intro p { max-width: 560px; }
+      .decision-legend { grid-template-columns: repeat(3, auto); justify-content: start; }
+      .proof-section { grid-template-columns: 1fr; }
+      .model-metrics { margin-top: 28px; border-left: 0; border-top: 1px solid #293036; }
+      .model-metrics div:first-child { padding-left: 0; }
+    }
+    @media (max-width: 640px) {
+      .app-shell { padding: 0; }
+      .topbar { min-height: 62px; padding-inline: 16px; }
+      .nav-action { min-width: 82px; padding-inline: 12px; }
+      .entry-layout { gap: 26px; padding: 24px 16px 28px; }
+      .hero-panel { padding: 0; }
+      .hero-panel .hero-title { margin-top: 20px; font-size: 44px; }
+      .hero-panel .hero-subtitle { margin-top: 22px; font-size: 25px; }
+      .hero-panel .hero-copy { font-size: 14px; }
+      .case-picker { grid-template-columns: 1fr; }
+      .case-button { min-height: 44px; border-left: 0; border-top: 1px solid var(--hairline); }
+      .case-button:first-child { border-top: 0; }
+      .upload-actions { grid-template-columns: 1fr; }
+      .source-preview { display: none !important; }
+      .trust-ribbon { grid-template-columns: 1fr; }
+      .trust-item,
+      .trust-item:first-child { min-height: 40px; padding: 9px 0; border-left: 0; border-top: 1px solid var(--hairline); }
+      .trust-item:first-child { border-top: 0; }
+      .trust-item span { display: none; }
+      .evidence-stage { padding: 12px; }
+      .stage-image-frame { aspect-ratio: 4 / 3; }
+      .stage-image-frame::after,
+      .stage-reticle { inset: 14px; }
+      .stage-status { left: 16px; bottom: 16px; }
+      .view-grid {
+        grid-template-columns: none;
+        grid-auto-flow: column;
+        grid-auto-columns: 106px;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        padding: 1px 1px 8px;
+      }
+      .process-section { padding: 22px 16px 34px; }
+      .process-copy h2 { font-size: 22px; }
+      .process-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 0; }
+      .result-section { padding: 42px 16px 52px; }
+      .result-intro h2,
+      .result-intro p { display: none; }
+      .decision-legend { margin-top: 14px; }
+      .decision-card { grid-template-columns: 1fr; gap: 22px; }
+      .decision-heading h3 { font-size: 44px; }
+      .score-block { padding: 22px 0 0; border-left: 0; border-top: 1px solid var(--hairline); }
+      .report-actions { grid-template-columns: 1fr 1fr; }
+      .report-dl { grid-template-columns: 84px minmax(0, 1fr); }
+      .report-sections { grid-template-columns: 1fr; }
+      .proof-section { padding: 36px 16px; }
+      .model-metrics div { padding-left: 16px; }
+      .model-metrics strong { font-size: 22px; }
+      .proof-section .market-metrics { grid-template-columns: 1fr; }
+      .proof-section .metric,
+      .proof-section .metric:first-child { padding: 14px 0; border-left: 0; border-top: 1px solid #293036; }
+      .proof-section .metric:first-child { border-top: 0; }
+      .site-footer { grid-template-columns: 1fr; gap: 6px; padding: 20px 16px; }
+      .site-footer span:last-child { text-align: left; }
+    }
   </style>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div class="mark" aria-hidden="true">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-          <path d="M12 3l7 3v5c0 4.6-2.8 8.1-7 10-4.2-1.9-7-5.4-7-10V6l7-3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-          <path d="M8.5 12.2l2.2 2.2 4.8-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#workbench" aria-label="ShareGuard影像信任工作台">
+        <span class="mark" aria-hidden="true"><span></span><span></span></span>
+        <h1>ShareGuard</h1>
+      </a>
+      <nav class="topnav" aria-label="主导航">
+        <a href="#resultSection">真实案例</a>
+        <a href="#proof">技术可信</a>
+        <a href="#workbench">适用场景</a>
+        <button id="headerAnalyzeButton" class="nav-action" type="button">检测影像</button>
+      </nav>
+      <div class="runtime-status">
+        <div class="engine"><span class="dot"></span><span id="engineLabel">公开演示模式，核心模型通过私有API接入</span></div>
+        <div class="mode-note">公开仓库展示产品闭环；真实模型、权重和训练数据保留在私有服务中。</div>
       </div>
-      <div>
-        <h1>ShareGuard影像鉴真</h1>
-        <p>真实传播链路中的 AI 影像可信初筛</p>
-      </div>
-    </div>
-    <div class="engine"><span class="dot"></span><span id="engineLabel">Fusion Engine</span></div>
-  </header>
+    </header>
 
-  <section class="market-strip" aria-label="评委快速理解入口">
-    <div class="market-copy">
-      <span class="eyebrow">评委快速理解入口</span>
-      <h2>用痛点-技术-产品-落地讲清楚影像鉴真</h2>
-      <p>ShareGuard 不把模型卖成一个分数，而是把“疑似 AI 图像”转成可归档、可复核、可对外沟通的鉴真报告，让评委同时看到真实需求、独家模型、可运行 Demo 和应用价值。</p>
-    </div>
-    <div class="market-metrics">
-      <div class="metric"><strong>创新性</strong><span>真实传播链路退化 + 多模型融合，区别于普通 AI 图检测。</span></div>
-      <div class="metric"><strong>社会价值</strong><span>服务 AI 内容可信治理，降低谣言图、伪造图和误传图风险。</span></div>
-      <div class="metric"><strong>商业性</strong><span>媒体、品牌、平台均可接入，Demo 已支持报告导出与 API 化。</span></div>
-    </div>
-  </section>
+    <main class="product-main">
+      <section id="workbench" class="entry-layout">
+        <section class="hero-panel">
+          <span class="eyebrow">EVIDENCE BEFORE EXPOSURE</span>
+          <h2 class="hero-title"><span>ShareGuard</span>影像鉴真</h2>
+          <p class="hero-subtitle">发布之前，先让证据说话。</p>
+          <p class="hero-copy">识别 AI 生成与传播后失真的影像，给品牌、媒体和审核团队一个可执行结论。</p>
 
-  <main>
-    <section class="panel">
-      <div class="panel-header">
-        <h2>待鉴真图像</h2>
-        <p>疑似 AI 图像、社交截图、转发图或二次编辑图。</p>
-      </div>
-      <div class="panel-body">
-        <div id="casePicker" class="case-picker" aria-label="客户场景"></div>
-        <div id="caseContext" class="case-context"></div>
-        <label class="dropzone" for="imageInput">
-          <strong id="filePrompt">选择图片</strong>
-          <span id="fileName">PNG、JPG、WEBP</span>
-          <input id="imageInput" type="file" accept="image/*">
-        </label>
-        <button id="analyzeButton" class="primary" disabled>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <path d="M8 12h8M12 8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-          开始鉴真
-        </button>
-        <div id="sourcePreview" class="source-preview">
-          <img id="previewImage" alt="待鉴真图像预览">
-          <dl class="meta-list">
-            <dt>文件</dt><dd id="metaFile">-</dd>
-            <dt>大小</dt><dd id="metaSize">-</dd>
-            <dt>类型</dt><dd id="metaType">-</dd>
-          </dl>
+          <div class="scenario-label">选择核验场景</div>
+          <div id="casePicker" class="case-picker" aria-label="客户场景"></div>
+          <div id="caseContext" class="case-context"></div>
+
+          <div class="upload-actions">
+            <label class="dropzone" for="imageInput">
+              <strong id="filePrompt">选择一张影像</strong>
+              <span id="fileName">PNG、JPG、WEBP</span>
+              <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp">
+            </label>
+            <button id="analyzeButton" class="primary" disabled>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M8 12h8M12 8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              开始鉴真
+            </button>
+          </div>
+
+          <div id="sourcePreview" class="source-preview">
+            <dl class="meta-list">
+              <div><dt>文件</dt><dd id="metaFile">-</dd></div>
+              <div><dt>大小</dt><dd id="metaSize">-</dd></div>
+              <div><dt>类型</dt><dd id="metaType">-</dd></div>
+            </dl>
+          </div>
+
+          <div class="trust-ribbon" aria-label="ShareGuard可信交付能力">
+            <div class="trust-item"><strong>证据链完整</strong><span>跨传播版本并列复核</span></div>
+            <div class="trust-item"><strong>私有模型API</strong><span>核心能力不进入公开仓库</span></div>
+            <div class="trust-item"><strong>报告可归档</strong><span>支持人工复核与追踪</span></div>
+          </div>
+        </section>
+
+        <section class="evidence-stage" aria-label="传播链路证据浏览器">
+          <div class="stage-header">
+            <span>CURRENT VIEW / <b id="stageViewLabel">原图</b></span>
+            <span id="stageCaseCode">CASE 02</span>
+          </div>
+          <div class="stage-image-frame">
+            <img id="previewImage" src="assets/flagship-event.jpg" alt="待鉴真图像预览">
+            <div class="stage-reticle" aria-hidden="true"></div>
+            <div class="stage-status"><span class="status-pulse"></span><span id="stageStatusLabel">传播链路已识别</span></div>
+          </div>
+          <div id="viewGrid" class="view-grid" aria-label="传播版本切换">
+            <button class="view-tile active" type="button"><div class="placeholder-img">原图</div><div class="view-caption"><strong>原图</strong><span>-</span></div></button>
+            <button class="view-tile" type="button"><div class="placeholder-img">JPEG</div><div class="view-caption"><strong>JPEG压缩</strong><span>-</span></div></button>
+            <button class="view-tile" type="button"><div class="placeholder-img">Resize</div><div class="view-caption"><strong>缩放转发</strong><span>-</span></div></button>
+            <button class="view-tile" type="button"><div class="placeholder-img">Screen</div><div class="view-caption"><strong>截图传播</strong><span>-</span></div></button>
+            <button class="view-tile" type="button"><div class="placeholder-img">Share</div><div class="view-caption"><strong>重度分享</strong><span>-</span></div></button>
+            <button class="view-tile" type="button"><div class="placeholder-img">Meme</div><div class="view-caption"><strong>图文拼贴</strong><span>-</span></div></button>
+          </div>
+        </section>
+      </section>
+
+      <section id="technology" class="process-section">
+        <div class="process-copy">
+          <h2>同一张影像，经历五次传播后会发生什么？</h2>
+          <p>ShareGuard 对比原图、重压缩、缩放、截图与拼贴版本，寻找跨传播仍保持一致的生成证据。</p>
         </div>
-      </div>
-    </section>
+        <ol class="process-rail" aria-label="鉴真流程">
+          <li class="active"><span></span><strong>接收影像</strong></li>
+          <li><span></span><strong>重建传播</strong></li>
+          <li><span></span><strong>形成证据</strong></li>
+          <li><span></span><strong>给出处置</strong></li>
+        </ol>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>传播链路视图</h2>
-        <p>原图与常见二次传播形态并列复核。</p>
-      </div>
-      <div class="panel-body">
-        <div id="viewGrid" class="view-grid">
-          <div class="view-tile"><div class="placeholder-img">原图</div><div class="view-caption"><strong>原图</strong><span>-</span></div></div>
-          <div class="view-tile"><div class="placeholder-img">JPEG</div><div class="view-caption"><strong>JPEG压缩</strong><span>-</span></div></div>
-          <div class="view-tile"><div class="placeholder-img">Resize</div><div class="view-caption"><strong>缩放转发</strong><span>-</span></div></div>
-          <div class="view-tile"><div class="placeholder-img">Screen</div><div class="view-caption"><strong>截图传播</strong><span>-</span></div></div>
-          <div class="view-tile"><div class="placeholder-img">Share</div><div class="view-caption"><strong>重度分享</strong><span>-</span></div></div>
-          <div class="view-tile"><div class="placeholder-img">Meme</div><div class="view-caption"><strong>图文拼贴</strong><span>-</span></div></div>
+      <section id="resultSection" class="result-section">
+        <div class="result-shell">
+          <aside class="result-intro">
+            <span class="result-kicker">旗舰案例 / 实时结果</span>
+            <h2>处置决策</h2>
+            <p>先给业务动作，再给风险分数。每一项结论都能回到传播版本与模型共识。</p>
+            <div class="decision-legend">
+              <span><i class="allow"></i>允许发布</span>
+              <span><i class="review"></i>人工复核</span>
+              <span><i class="hold"></i>暂缓发布</span>
+            </div>
+          </aside>
+          <section class="panel report-panel">
+            <div class="panel-header">
+              <h2>处置决策</h2>
+              <p>先给业务动作，再给风险分数、证据链和报告。</p>
+            </div>
+            <div id="reportBody" class="panel-body">
+              <div class="report-empty">正在载入旗舰案例</div>
+            </div>
+          </section>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="panel report-panel">
-      <div class="panel-header">
-        <h2>鉴真报告</h2>
-        <p>结论、风险等级、不确定性和复核建议。</p>
-      </div>
-      <div id="reportBody" class="panel-body">
-        <div class="report-empty">等待样本</div>
-      </div>
-    </section>
-  </main>
+      <section id="proof" class="proof-section" aria-label="技术与落地证据">
+        <div class="proof-copy">
+          <span>技术证据 / 公开展示层</span>
+          <h2>传播鲁棒性，不是一次性命中。</h2>
+          <p>双编码器与独立种子模型形成共识，核心融合系数、内部阈值和模型文件不在公开报告中暴露。</p>
+          <small>评委快速理解入口：痛点-技术-产品-落地。</small>
+        </div>
+        <div class="model-metrics" aria-label="公开模型指标">
+          <div><span>BALANCED ACC.</span><strong>0.8399</strong></div>
+          <div><span>AUC</span><strong>0.9199</strong></div>
+          <div><span>AP</span><strong>0.9899</strong></div>
+        </div>
+        <div class="market-metrics">
+          <div class="metric"><strong>创新性</strong><span>真实传播链路退化 + 多模型融合，区别于普通 AI 图检测。</span></div>
+          <div class="metric"><strong>社会价值</strong><span>降低谣言图、伪造图和误传图的发布风险。</span></div>
+          <div class="metric"><strong>商业性</strong><span>媒体、品牌和平台可通过 Web、API 或私有部署接入。</span></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <strong>ShareGuard</strong>
+      <span>受控 API · 报告可归档 · 支持人工复核</span>
+      <span>本系统用于风险筛查，不替代司法鉴定。</span>
+    </footer>
+  </div>
 
   <script>
     const input = document.getElementById("imageInput");
@@ -583,6 +2350,12 @@
     const casePicker = document.getElementById("casePicker");
     const caseContext = document.getElementById("caseContext");
     const engineLabel = document.getElementById("engineLabel");
+    const headerAnalyzeButton = document.getElementById("headerAnalyzeButton");
+    const stageViewLabel = document.getElementById("stageViewLabel");
+    const stageCaseCode = document.getElementById("stageCaseCode");
+    const stageStatusLabel = document.getElementById("stageStatusLabel");
+    const resultSection = document.getElementById("resultSection");
+    const DEFAULT_CASE_ID = "brand";
     const sampleCases = [
       {
         id: "newsroom",
@@ -620,8 +2393,10 @@
     let currentImageDataUrl = null;
     let activeCase = null;
     let latestPayload = null;
+    let currentViews = [];
 
     renderCasePicker();
+    loadSampleCase(DEFAULT_CASE_ID);
 
     input.addEventListener("change", () => {
       currentFile = input.files[0] || null;
@@ -649,7 +2424,8 @@
       reportBody.innerHTML = "<div class='report-empty'>样本已载入</div>";
     });
 
-    button.addEventListener("click", analyzeCurrentFile);
+    button.addEventListener("click", () => analyzeCurrentFile({ revealResult: true }));
+    headerAnalyzeButton.addEventListener("click", () => input.click());
 
     function renderCasePicker() {
       casePicker.innerHTML = sampleCases.map(item => `
@@ -667,9 +2443,14 @@
       activeCase = sampleCases.find(item => item.id === caseId) || sampleCases[0];
       updateCaseButtons();
       renderCaseContext(activeCase);
-      const dataUrl = makeSampleImageDataUrl(activeCase);
+      let dataUrl;
+      try {
+        dataUrl = await loadFlagshipImageDataUrl();
+      } catch (err) {
+        dataUrl = makeSampleImageDataUrl(activeCase);
+      }
       const blob = await dataUrlToBlob(dataUrl);
-      currentFile = new File([blob], `${activeCase.id}-shareguard-sample.png`, { type: "image/png" });
+      currentFile = new File([blob], `${activeCase.id}-shareguard-sample.jpg`, { type: blob.type || "image/jpeg" });
       if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
       currentObjectUrl = URL.createObjectURL(currentFile);
       currentImageDataUrl = dataUrl;
@@ -683,6 +2464,18 @@
       button.disabled = false;
       renderViews(null);
       await analyzeCurrentFile();
+    }
+
+    async function loadFlagshipImageDataUrl() {
+      const response = await fetch("assets/flagship-event.jpg", { cache: "force-cache" });
+      if (!response.ok) throw new Error("旗舰案例图像不可用");
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => resolve(String(reader.result || "")));
+        reader.addEventListener("error", () => reject(new Error("旗舰案例图像读取失败")));
+        reader.readAsDataURL(blob);
+      });
     }
 
     function updateCaseButtons() {
@@ -709,10 +2502,12 @@
       `;
     }
 
-    async function analyzeCurrentFile() {
+    async function analyzeCurrentFile(options = {}) {
       if (!currentFile) return;
       button.disabled = true;
-      reportBody.innerHTML = "<div class='report-empty'>鉴真中</div>";
+      document.body.classList.add("is-analyzing");
+      stageStatusLabel.textContent = "跨传播证据正在形成";
+      reportBody.innerHTML = "<div class='loading-skeleton' aria-label='正在生成处置建议与证据链'><span></span><span></span><span></span><p>正在生成处置建议与证据链</p></div>";
       const body = new FormData();
       body.append("image", currentFile);
       try {
@@ -722,6 +2517,11 @@
           const response = await fetch("/api/analyze", { method: "POST", body });
           const payload = await response.json();
           if (!response.ok) throw new Error(payload.error || "分析失败");
+          // 后端为mock时切换到公开演示结果，避免把烟测分数当成真实模型能力展示。
+          if (payload.backend === "mock") {
+            setAnalysisPayload(await buildStaticDemoPayload());
+            return;
+          }
           setAnalysisPayload(payload);
         }
       } catch (err) {
@@ -733,6 +2533,10 @@
         }
       } finally {
         button.disabled = false;
+        document.body.classList.remove("is-analyzing");
+        if (options.revealResult) {
+          resultSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
       }
     }
 
@@ -743,11 +2547,11 @@
 
     function setAnalysisPayload(payload) {
       latestPayload = payload;
-      engineLabel.textContent = payload.backend === "mock"
-        ? "Demo Engine"
-        : payload.backend === "static-demo"
-          ? "GitHub Pages 静态演示"
-          : "Fusion Engine";
+      document.body.classList.add("has-result");
+      engineLabel.textContent = payload.backend === "noisyshare-fusion" || payload.backend?.startsWith("remote:")
+        ? "私有模型API已接入"
+        : "公开演示模式，核心模型通过私有API接入";
+      stageStatusLabel.textContent = "传播链路已识别";
       renderViews(payload);
       renderReport(payload);
     }
@@ -759,21 +2563,44 @@
         width: payload?.image?.width || "-",
         height: payload?.image?.height || "-"
       } : null;
-      const views = payload ? [originalTile, ...(payload.propagation_views || [])] : [originalTile];
       const labels = ["原图", "JPEG压缩", "缩放转发", "截图传播", "重度分享", "图文拼贴"];
+      const propagated = payload?.propagation_views || [];
+      currentViews = labels.map((label, index) => {
+        const view = index === 0 ? originalTile : propagated[index - 1];
+        return view ? { ...view, label: view.label || label } : null;
+      });
       viewGrid.innerHTML = labels.map((label, index) => {
-        const view = views[index];
+        const view = currentViews[index];
         if (!view) {
-          return `<div class="view-tile"><div class="placeholder-img">${escapeHtml(shortLabel(label))}</div><div class="view-caption"><strong>${escapeHtml(label)}</strong><span>-</span></div></div>`;
+          return `<button class="view-tile" type="button" disabled><div class="placeholder-img">${escapeHtml(shortLabel(label))}</div><div class="view-caption"><strong>${escapeHtml(label)}</strong><span>-</span></div></button>`;
         }
         const size = view.width && view.height ? `${view.width}×${view.height}` : "-";
         return `
-          <div class="view-tile">
+          <button class="view-tile" type="button" data-view-index="${index}" aria-label="查看${escapeHtml(view.label || label)}版本">
             <img src="${view.image_data_url}" alt="${escapeHtml(label)}">
             <div class="view-caption"><strong>${escapeHtml(view.label || label)}</strong><span>${escapeHtml(size)}</span></div>
-          </div>
+          </button>
         `;
       }).join("");
+      viewGrid.querySelectorAll("[data-view-index]").forEach(item => {
+        item.addEventListener("click", () => selectEvidenceView(Number(item.dataset.viewIndex)));
+      });
+      const preferredIndex = payload && currentViews[3] ? 3 : 0;
+      selectEvidenceView(preferredIndex);
+      const caseIndex = Math.max(0, sampleCases.findIndex(item => item.id === activeCase?.id));
+      stageCaseCode.textContent = `CASE ${String(caseIndex + 1).padStart(2, "0")}`;
+    }
+
+    function selectEvidenceView(index) {
+      const view = currentViews[index];
+      if (!view) return;
+      previewImage.src = view.image_data_url;
+      previewImage.alt = `${view.label}证据视图`;
+      stageViewLabel.textContent = view.label;
+      viewGrid.querySelectorAll("[data-view-index]").forEach(item => {
+        item.classList.toggle("active", Number(item.dataset.viewIndex) === index);
+        item.setAttribute("aria-pressed", Number(item.dataset.viewIndex) === index ? "true" : "false");
+      });
     }
 
     function makeSampleImageDataUrl(item) {
@@ -842,8 +2669,14 @@
     }
 
     async function dataUrlToBlob(dataUrl) {
-      const response = await fetch(dataUrl);
-      return response.blob();
+      const [header, payload = ""] = String(dataUrl).split(",", 2);
+      const mime = /^data:([^;]+)/.exec(header)?.[1] || "application/octet-stream";
+      const binary = header.includes(";base64") ? atob(payload) : decodeURIComponent(payload);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return new Blob([bytes], { type: mime });
     }
 
     async function fileToDataUrl(file) {
@@ -1016,7 +2849,7 @@
             title: "检测结论",
             items: [
               `综合结论：${conclusion}`,
-              `AI生成概率：${(probability * 100).toFixed(1)}%`,
+              `AI生成风险：${(probability * 100).toFixed(1)}%`,
               `风险等级：${riskLevel}`,
             ],
           },
@@ -1025,6 +2858,7 @@
             items: [
               "已生成5种传播退化视图用于对照复核。",
               "覆盖JPEG压缩、缩放转发、截图传播、重度分享和图文拼贴等常见场景。",
+              "传播后仍保持中高风险，建议进入人工复核。",
             ],
           },
           {
@@ -1073,39 +2907,59 @@
       `).join("");
       const riskClass = ["high", "medium", "low", "uncertain"].includes(payload.risk_level) ? payload.risk_level : "uncertain";
       reportBody.innerHTML = `
-        <div class="decision">
-          <div>
+        <div class="decision-card">
+          <div class="decision-heading">
+            <span class="decision-kicker">处置结论</span>
+            <h3>${escapeHtml(decisionTitle(payload))}</h3>
+            <p class="decision-action"><strong>建议动作：</strong>${escapeHtml(report.recommended_action || "-")}</p>
             <div class="badge ${riskClass}">${escapeHtml(report.conclusion || labelText(payload.label))}</div>
           </div>
-          <strong>${riskText(payload.risk_level)}</strong>
-        </div>
-        <div class="score-block">
-          <div class="score-number">${percent}%</div>
-          <div class="score-line"><div class="score-fill" style="width:${Math.max(0, Math.min(100, probability * 100))}%"></div></div>
+          <div class="score-block">
+            <div class="score-number">${percent}%</div>
+            <div>AI生成风险 · ${escapeHtml(riskText(payload.risk_level))}</div>
+            <div class="score-line"><div class="score-fill ${riskClass}" style="width:${Math.max(0, Math.min(100, probability * 100))}%"></div></div>
+          </div>
+          <div class="actions report-actions">
+            <button class="ghost" id="saveHtmlReportButton" type="button">保存HTML报告</button>
+            <button class="ghost" id="printReportButton" type="button">打印/保存PDF</button>
+            <button class="ghost" id="copyReportButton" type="button">复制摘要</button>
+            <button class="ghost" id="downloadJsonButton" type="button">下载原始JSON</button>
+          </div>
         </div>
         ${businessContext}
+        <p class="evidence-note">${escapeHtml(evidenceSummary(payload))}</p>
         <dl class="report-dl">
           <dt>报告编号</dt><dd>${escapeHtml(report.report_id || "-")}</dd>
           <dt>生成时间</dt><dd>${escapeHtml(formatDateTime(report.generated_at))}</dd>
           <dt>文件</dt><dd>${escapeHtml(payload.file_name)}</dd>
-          <dt>AI概率</dt><dd>${percent}%</dd>
+          <dt>AI生成风险</dt><dd>${percent}%</dd>
           <dt>置信度</dt><dd>${(confidence * 100).toFixed(1)}%</dd>
           <dt>不确定性</dt><dd>${escapeHtml(report.uncertainty || "-")}</dd>
           <dt>复核建议</dt><dd>${escapeHtml(report.recommended_action || "-")}</dd>
         </dl>
         <div class="report-sections">${sections}</div>
         <ul class="notes">${notes}</ul>
-        <div class="actions">
-          <button class="ghost" id="saveHtmlReportButton" type="button">保存HTML报告</button>
-          <button class="ghost" id="printReportButton" type="button">打印/保存PDF</button>
-          <button class="ghost" id="copyReportButton" type="button">复制摘要</button>
-          <button class="ghost" id="downloadJsonButton" type="button">下载原始JSON</button>
-        </div>
       `;
       document.getElementById("saveHtmlReportButton").addEventListener("click", saveHtmlReport);
       document.getElementById("printReportButton").addEventListener("click", printReport);
       document.getElementById("copyReportButton").addEventListener("click", copyReport);
       document.getElementById("downloadJsonButton").addEventListener("click", downloadJsonReport);
+    }
+
+    function decisionTitle(payload) {
+      if (payload.risk_level === "low") return "允许发布";
+      if (payload.risk_level === "uncertain") return "人工复核";
+      return "暂缓发布";
+    }
+
+    function evidenceSummary(payload) {
+      if (payload.risk_level === "low") {
+        return "跨传播版本未形成稳定高风险证据，可进入低风险发布流程，并保留来源记录。";
+      }
+      if (payload.risk_level === "uncertain") {
+        return "传播版本之间的证据尚未形成明确共识，建议结合来源与上下文完成人工复核。";
+      }
+      return "传播后仍保持中高风险，建议进入人工复核。原图、截图、压缩、转发和图文拼贴版本已纳入同一证据链。";
     }
 
     async function copyReport() {
@@ -1166,7 +3020,7 @@
         `文件：${payload.file_name}`,
         activeCase ? `比赛场景：${activeCase.title} / ${activeCase.buyer}` : "",
         `结论：${report.conclusion}`,
-        `AI生成概率：${(payload.probability_ai_generated * 100).toFixed(1)}%`,
+        `AI生成风险：${(payload.probability_ai_generated * 100).toFixed(1)}%`,
         `风险等级：${riskText(payload.risk_level)}`,
         `不确定性：${report.uncertainty}`,
         `复核建议：${report.recommended_action}`,
@@ -1236,7 +3090,7 @@
     dl { display: grid; grid-template-columns: 120px 1fr; gap: 9px 14px; margin: 0; }
     dt { color: #667085; }
     dd { margin: 0; }
-    section { border-left: 3px solid #1f66d1; background: #f8fafc; padding: 12px 14px; margin: 12px 0; }
+    section { border-top: 2px solid #1f66d1; background: #f8fafc; padding: 12px 14px; margin: 12px 0; }
     ul { line-height: 1.65; }
     .views { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
     figure { margin: 0; border: 1px solid #d6deea; background: #fff; }
@@ -1265,7 +3119,7 @@
       </div>
       <div>
         <div class="score">${percent}%</div>
-        <div>AI生成概率</div>
+        <div>AI生成风险</div>
       </div>
     </div>
     <dl>

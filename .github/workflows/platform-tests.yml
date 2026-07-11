@@ -24,5 +24,13 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          python -m unittest tests.test_platform_backend
+          python -m unittest discover -s tests -v
 
+      - name: Validate pilot Compose configuration
+        run: |
+          cp deploy/shareguard.pilot.env.example deploy/shareguard.pilot.env
+          docker compose -f deploy/docker-compose.pilot.yml config
+
+      - name: Build private inference container
+        run: |
+          docker build --pull -t shareguard-platform:ci .

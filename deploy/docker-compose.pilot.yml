@@ -1,0 +1,25 @@
+services:
+  shareguard:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: shareguard-platform:pilot
+    restart: unless-stopped
+    gpus: all
+    env_file:
+      - ./shareguard.pilot.env
+    ports:
+      - "127.0.0.1:${PORT:-7860}:7860"
+    read_only: true
+    cap_drop:
+      - ALL
+    volumes:
+      - "${SHAREGUARD_MODEL_DIR:-../private-models}:/models:ro"
+      - shareguard-cache:/cache
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  shareguard-cache:

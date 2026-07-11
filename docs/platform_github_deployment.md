@@ -1,181 +1,107 @@
-# ShareGuard GitHub 部署方案
+# ShareGuard 私有部署方案
 
-## 核心判断
+## 部署原则
 
-HPC 只负责训练和导出模型，不作为线上推理服务。比赛 Demo 或公开部署应从 GitHub 仓库启动平台代码，并在启动时下载模型 artifact 到本地缓存。
+ShareGuard 使用三个彼此隔离的产品表面：
 
-推荐结构：
+1. GitHub Pages 只展示明确标识的静态示例，不调用真实模型。
+2. 邀请制 Web 工作台与真实 API 同源部署，并由外层访问网关限制访问者。
+3. 私有 GPU 服务加载模型并返回产品级决策，不向客户端返回模型内部参数。
+
+HPC 只负责训练、评估和导出模型。GitHub 保存源代码、测试和容器配置，不保存权重、私有下载地址、API Token、客户图片或真实环境文件。
+
+## 模型制品
+
+批准的模型制品只能通过以下方式进入推理容器：
+
+- 将已批准的 `.tar.gz` 压缩包作为只读卷挂载到 `/models`。
+- 从私有对象存储取得短期签名 URL，下载到部署环境的加密缓存卷。
+
+不要把模型放入公开 Release、公开模型仓库、Git LFS 或普通 Git 历史。Pilot 和 Production 必须配置 `SHAREGUARD_BUNDLE_SHA256`；服务会在解压前校验压缩包，并从已批准归档重新生成解压缓存。已解压目录只允许用于本地开发模式。
+
+## 本地静态与 Mock 验证
+
+```powershell
+$env:SHAREGUARD_MODE="local"
+$env:SHAREGUARD_BACKEND="mock"
+python -m shareguard.platform.app
+```
+
+打开 `http://127.0.0.1:7860`。Mock 结果只验证页面和接口，不代表真实检测结论。
+
+## 私有试点容器
+
+安全的环境变量模板位于 `deploy/shareguard.pilot.env.example`。真实的 `deploy/shareguard.pilot.env` 必须留在 Git 之外，并至少配置：
 
 ```text
-GitHub repo
-  Dockerfile
-  requirements-platform.txt
-  shareguard/platform/*
-  scripts/run_platform.py
-  docs/platform_github_deployment.md
-
-Model artifact
-  GitHub Release asset / Git LFS / Hugging Face model repo
-  推荐：shareguard-noisyshare-fusion-v1.tar.gz
+SHAREGUARD_MODE=pilot
+SHAREGUARD_BACKEND=fusion-bundle
+SHAREGUARD_DEVICE=cuda
+BUNDLE=/models/shareguard-noisyshare-fusion-v1.tar.gz
+SHAREGUARD_MODEL_CACHE=/cache/models
+SHAREGUARD_BUNDLE_SHA256=<approved-archive-sha256>
+SHAREGUARD_API_TOKEN=
+SHAREGUARD_ALLOWED_ORIGINS=
 ```
 
-不要把大型 `model.pt` 直接提交到普通 git 历史里。GitHub 官方建议仓库保持小型，理想上小于 1GB；Git LFS 可处理更大文件，但 Free/Pro 单文件上限为 2GB，并会消耗 LFS 存储和带宽。
+试点工作台应放在身份访问网关之后。浏览器不保存机器 API Token；需要机器调用时再配置 `SHAREGUARD_API_TOKEN`。
 
-## 从 HPC 导出模型
+`SHAREGUARD_MODEL_DIR` 指向包含批准压缩包的本机私有目录。Compose 只把服务发布到 `127.0.0.1`，应由同机访问网关代理给评委或试点客户：
 
-训练完成后，在 HPC 上固化一个推理模型包。当前最终主方法是：
+```powershell
+$env:SHAREGUARD_MODEL_DIR="C:\private\ShareGuard_models"
+docker compose -f deploy/docker-compose.pilot.yml up --build
+```
+
+容器以非 root 用户运行，模型归档只读挂载，根文件系统只读，解压和公开 backbone 缓存写入独立 `/cache` 卷，健康检查使用 `/v1/ready`。Compose 请求一张 NVIDIA GPU；宿主机需安装 NVIDIA 驱动和 Container Toolkit。`SHAREGUARD_DEVICE=cuda` 会在GPU不可用时直接启动失败，避免演示环境静默退回慢速CPU。
+
+## 私有签名地址模式
+
+需要在云端启动时拉取压缩包，可使用：
 
 ```text
-clip_b_l_score_fusion
-= CLIP-B feature-fusion 5-seed ensemble
-+ CLIP-L feature-fusion 5-seed ensemble
-+ dev-selected score fusion
+SHAREGUARD_MODE=production
+SHAREGUARD_BACKEND=fusion-bundle
+BUNDLE_URL=<short-lived-private-url>
+SHAREGUARD_BUNDLE_SHA256=<approved-archive-sha256>
+SHAREGUARD_MODEL_CACHE=/cache/models
+SHAREGUARD_API_TOKEN=<machine-token>
 ```
 
-因此不要只拷贝一个 `model.pt`，而是导出完整 bundle：
-
-```bash
-cd ~/ShareGuard
-
-~/.conda/envs/shareguard/bin/python scripts/export_noisyshare_fusion_bundle.py \
-  --method clip_b_l_score_fusion \
-  --out-dir model_artifacts/shareguard-noisyshare-fusion-v1 \
-  --archive model_artifacts/shareguard-noisyshare-fusion-v1.tar.gz
-```
-
-输出：
-
-```text
-model_artifacts/shareguard-noisyshare-fusion-v1/
-model_artifacts/shareguard-noisyshare-fusion-v1.tar.gz
-model_artifacts/shareguard-noisyshare-fusion-v1.tar.gz.sha256
-```
-
-bundle 内含：
-
-- `manifest.json`
-- `model_card.json`
-- `models/clip_b/seed42..46/model.pt`
-- `models/clip_l/seed42..46/model.pt`
-- final public baseline table 和 clean-boost 指标
-
-## 上传模型 artifact
-
-选项 A：GitHub Release asset
-
-```bash
-gh release create shareguard-noisyshare-fusion-v1 \
-  model_artifacts/shareguard-noisyshare-fusion-v1.tar.gz \
-  model_artifacts/shareguard-noisyshare-fusion-v1.tar.gz.sha256 \
-  --title "ShareGuard NoisyShare-Fusion v1" \
-  --notes "Deployable CLIP-B/L feature-fusion ensemble bundle."
-```
-
-然后复制 release asset 的下载 URL，作为部署环境变量：
-
-```text
-BUNDLE_URL=https://github.com/<owner>/<repo>/releases/download/shareguard-noisyshare-fusion-v1/shareguard-noisyshare-fusion-v1.tar.gz
-```
-
-选项 B：Git LFS
-
-```bash
-git lfs install
-git lfs track "*.pt" "*.pth" "*.safetensors"
-git add .gitattributes models/model.pt
-git commit -m "Add demo model with Git LFS"
-```
-
-选项 C：Hugging Face model repo
-
-适合模型较大或需要公开模型卡时使用。部署时把 `BUNDLE_URL` 指向 raw download URL。
-
-## 本地或云端启动
-
-无模型 smoke：
-
-```bash
-python -m shareguard.platform.app --host 127.0.0.1 --port 7860 --backend mock
-```
-
-真实模型，本地已有 fusion bundle：
-
-```bash
-python -m shareguard.platform.app \
-  --host 0.0.0.0 \
-  --port 7860 \
-  --backend fusion-bundle \
-  --bundle /models/shareguard-noisyshare-fusion-v1
-```
-
-真实模型，本地已有 `.tar.gz` 压缩包：
-
-```bash
-python -m shareguard.platform.app \
-  --host 0.0.0.0 \
-  --port 7860 \
-  --backend fusion-bundle \
-  --bundle model_artifacts/shareguard-noisyshare-fusion-v1.tar.gz
-```
-
-真实模型，从 URL 下载并解包：
-
-```bash
-python -m shareguard.platform.app \
-  --host 0.0.0.0 \
-  --port 7860 \
-  --backend fusion-bundle \
-  --bundle-url "$BUNDLE_URL" \
-  --bundle-cache "${SHAREGUARD_MODEL_CACHE:-/models}"
-```
-
-Docker：
-
-```bash
-docker build -t shareguard-platform .
-docker run --rm -p 7860:7860 \
-  -e SHAREGUARD_BACKEND=fusion-bundle \
-  -e BUNDLE_URL="$BUNDLE_URL" \
-  shareguard-platform \
-  python -m shareguard.platform.app --host 0.0.0.0 --port 7860 --backend fusion-bundle --bundle-url "$BUNDLE_URL"
-```
+下载先进入临时文件，摘要验证通过后才会原子替换 `/cache/models` 中的缓存制品。CLIP 与 DINOv2 的公开 backbone 也使用 `/cache`；无外网部署需预先填充该缓存卷。
 
 ## API
 
+新接入使用：
+
 ```http
-POST /api/analyze
+POST /v1/analyze
+Authorization: Bearer <token>
 Content-Type: multipart/form-data
 
 field: image
 ```
 
-返回字段：
+平台返回 `allow`、`review` 或 `hold` 三种业务决策，以及风险、置信度、不确定性、处置建议和报告。兼容接口 `/api/analyze` 暂时保留，并返回 `Deprecation: true`。
 
-```json
-{
-  "file_name": "example.png",
-  "label": "ai_generated",
-  "probability_ai_generated": 0.91,
-  "confidence": 0.82,
-  "risk_level": "high",
-  "backend": "noisyshare-fusion",
-  "image": {"width": 512, "height": 512, "mode": "RGB"},
-  "evidence": [
-    "bundle: /models/shareguard-noisyshare-fusion-v1",
-    "method: clip_b_l_score_fusion"
-  ],
-  "raw": {
-    "group_scores": {"clip_b": 0.88, "clip_l": 0.93},
-    "threshold": 0.72,
-    "alpha_clip_l": 0.63
-  }
-}
+服务不会返回内部路径、融合参数、阈值、逐子模型分数或原始预测字典。结果是发布风险辅助信号，不是司法鉴定或真实性证书。
+
+## 隐私与运行边界
+
+- 默认在内存中处理图片，不持久化原图。
+- 默认禁止跨域；只有精确命中 `SHAREGUARD_ALLOWED_ORIGINS` 才返回 CORS 许可头。
+- 单图默认上限 10 MiB、2500 万像素，仅接受 JPEG、PNG 和 WebP。
+- GPU 默认只并行执行一个推理任务，等待队列默认最多八个请求。
+- HTTP 请求线程默认最多十六个，避免图片解码流量无限创建线程。
+- `/v1/health` 只表示进程存活，`/v1/ready` 表示模型服务可接收任务。
+- 日志只记录请求 ID、状态和错误类别，不记录图片内容、Token 或模型内部输出。
+
+## 上线前检查
+
+```powershell
+python -m unittest discover -s tests -v
+git diff --check
+git ls-files | rg "(model_artifacts|\.pt$|\.pth$|\.ckpt$|\.safetensors$|\.tar\.gz$|\.pem$|\.env$)"
 ```
 
-## 比赛 Demo 推荐部署顺序
-
-1. 先用 `--backend mock` 把 GitHub 部署跑通。
-2. 在 HPC 上运行 `scripts/export_noisyshare_fusion_bundle.py`。
-3. 上传 `shareguard-noisyshare-fusion-v1.tar.gz` 到 GitHub Release 或 Hugging Face。
-4. 用 `--backend fusion-bundle --bundle-url "$BUNDLE_URL"` 启动线上 Demo。
-5. 截图和录制视频时明确显示这是 `noisyshare-fusion` 后端，不再显示 mock。
+最后一条命令不应列出任何真实模型或秘密文件。文档中的文字引用不等于制品被跟踪，应结合完整路径复核。

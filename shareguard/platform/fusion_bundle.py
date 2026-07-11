@@ -45,6 +45,7 @@ class NoisyShareFusionBundleBackend:
         self.manifest = load_bundle_manifest(self.bundle_dir)
         self._predictor_factory = predictor_factory
         self._predictor = None
+        self._ready = False
 
     def _load_predictor(self):
         if self._predictor is not None:
@@ -55,9 +56,22 @@ class NoisyShareFusionBundleBackend:
         self._predictor = FeatureFusionEnsemblePredictor(self.manifest, self.bundle_dir, self.device)
         return self._predictor
 
+    def warmup(self) -> None:
+        if self._ready:
+            return
+        predictor = self._load_predictor()
+        loader = getattr(predictor, "_load", None) or getattr(predictor, "load", None)
+        if loader:
+            loader()
+        self._ready = True
+
+    def is_ready(self) -> bool:
+        return self._ready
+
     def analyze(self, image: Image.Image, filename: str = "image") -> DetectionResult:
         rgb = image.convert("RGB")
         payload = self._load_predictor().predict(rgb)
+        self._ready = True
         prob = clamp01(payload.get("probability_ai_generated", payload.get("probability", 0.0)))
         confidence = clamp01(payload.get("confidence", abs(prob - 0.5) * 2.0))
         label = payload.get("label", label_from_probability(prob, self.manifest["threshold"]))
@@ -72,12 +86,14 @@ class NoisyShareFusionBundleBackend:
             backend=self.name,
             image=image_info(rgb),
             evidence=[
-                f"bundle: {self.bundle_dir}",
+                "私有模型服务：NoisyShare-Fusion 已接入",
                 f"method: {self.manifest['method']}",
-                f"alpha_clip_l: {self.manifest['alpha_clip_l']}",
-                f"threshold: {self.manifest['threshold']}",
+                "内部权重、阈值和融合参数不在公开响应中返回",
             ],
-            raw=payload.get("raw", payload),
+            raw={
+                "model_version": self.manifest.get("model_version", "shareguard-private-v1"),
+                "serving_mode": "private-fusion-bundle",
+            },
         )
 
 
@@ -246,4 +262,3 @@ class FeatureFusionEnsemblePredictor:
         ]
         arr = self.np.asarray(bins + stats, dtype=self.np.float32)
         return self.torch.from_numpy(arr).unsqueeze(0).to(self.device)
-

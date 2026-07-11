@@ -6,8 +6,12 @@ from email.parser import BytesParser
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
+import os
 from pathlib import Path
-from typing import Optional
+import secrets
+from threading import BoundedSemaphore
+from typing import Mapping, Optional
+from uuid import uuid4
 
 from PIL import Image, UnidentifiedImageError
 
@@ -17,12 +21,51 @@ from .backends import (
     RemoteDetectorBackend,
     ShareGuardDetectorBackend,
 )
+from .config import PlatformConfig
 from .fusion_bundle import NoisyShareFusionBundleBackend
 from .model_artifacts import resolve_bundle_path, resolve_checkpoint_path
 from .product import build_authenticity_report, make_propagation_views
+from .service import AnalysisError, AnalysisService
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+MULTIPART_OVERHEAD_BYTES = 64 * 1024
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "img-src 'self' data: blob:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "connect-src 'self'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server with a hard cap on active request threads."""
+
+    daemon_threads = True
+
+    def __init__(self, server_address, handler_class, max_workers: int = 16):
+        if max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
+        self._request_slots = BoundedSemaphore(max_workers)
+        super().__init__(server_address, handler_class)
+
+    def process_request(self, request, client_address):
+        self._request_slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 def json_bytes(payload, status: int = 200):
@@ -70,61 +113,224 @@ def read_multipart_image(handler: BaseHTTPRequestHandler):
     return parse_multipart_image(handler.headers.get("Content-Type", ""), body)
 
 
-def make_handler(backend: DetectorBackend):
-    class ShareGuardHandler(BaseHTTPRequestHandler):
-        server_version = "ShareGuardPlatform/0.1"
+def bearer_token_is_valid(header_value: Optional[str], expected_token: Optional[str]):
+    if not expected_token:
+        return True
+    prefix = "Bearer "
+    if not header_value or not header_value.startswith(prefix):
+        return False
+    return secrets.compare_digest(header_value[len(prefix):], expected_token)
 
-        def send_payload(self, status: int, content_type: str, data: bytes):
+
+def error_payload(request_id: str, code: str, message: str):
+    return {
+        "request_id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def make_handler(
+    backend: DetectorBackend,
+    config: Optional[PlatformConfig] = None,
+    service: Optional[AnalysisService] = None,
+):
+    runtime_config = config or PlatformConfig()
+    analysis_service = service or AnalysisService(backend, runtime_config)
+
+    class ShareGuardHandler(BaseHTTPRequestHandler):
+        server_version = "ShareGuard"
+        sys_version = ""
+
+        def send_payload(
+            self,
+            status: int,
+            content_type: str,
+            data: bytes,
+            extra_headers=None,
+        ):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+            if self.path.startswith(("/api/", "/v1/", "/health")):
+                self.send_header("Cache-Control", "no-store")
+            origin = self.headers.get("Origin")
+            if runtime_config.is_origin_allowed(origin):
+                self.send_header("Access-Control-Allow-Origin", origin.rstrip("/"))
+                self.send_header("Vary", "Origin")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
-            self.wfile.write(data)
+            if data:
+                self.wfile.write(data)
+
+        def send_json(self, payload, status=200, extra_headers=None):
+            response_status, content_type, data = json_bytes(payload, status=status)
+            self.send_payload(
+                response_status,
+                content_type,
+                data,
+                extra_headers=extra_headers,
+            )
+
+        def new_request_id(self):
+            return f"sg_req_{uuid4().hex}"
 
         def do_OPTIONS(self):
-            self.send_payload(204, "text/plain", b"")
+            request_id = self.new_request_id()
+            origin = self.headers.get("Origin")
+            if origin and not runtime_config.is_origin_allowed(origin):
+                self.send_json(
+                    error_payload(
+                        request_id,
+                        "origin_not_allowed",
+                        "该来源不允许跨域访问此服务。",
+                    ),
+                    status=403,
+                )
+                return
+            self.send_payload(
+                204,
+                "text/plain; charset=utf-8",
+                b"",
+                extra_headers={
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": (
+                        "Authorization, Content-Type, X-File-Name"
+                    ),
+                    "Access-Control-Max-Age": "600",
+                },
+            )
 
         def do_GET(self):
             if self.path in {"/", "/index.html"}:
                 path = STATIC_DIR / "index.html"
                 self.send_payload(200, "text/html; charset=utf-8", path.read_bytes())
                 return
-            if self.path == "/health":
-                status, content_type, data = json_bytes({
-                    "status": "ok",
-                    "backend": backend.name,
-                    "routes": ["/", "/health", "/api/analyze"],
-                })
-                self.send_payload(status, content_type, data)
+            if self.path == "/assets/flagship-event.jpg":
+                path = STATIC_DIR / "assets" / "flagship-event.jpg"
+                self.send_payload(
+                    200,
+                    "image/jpeg",
+                    path.read_bytes(),
+                    extra_headers={"Cache-Control": "public, max-age=86400"},
+                )
                 return
-            status, content_type, data = json_bytes({"error": "Not found"}, status=404)
-            self.send_payload(status, content_type, data)
+            if self.path in {"/health", "/v1/health"}:
+                self.send_json({
+                    "request_id": self.new_request_id(),
+                    "status": "ok",
+                    "model_version": runtime_config.model_version,
+                    "routes": [
+                        "/",
+                        "/v1/health",
+                        "/v1/ready",
+                        "/v1/analyze",
+                    ],
+                })
+                return
+            if self.path == "/v1/ready":
+                checker = getattr(analysis_service, "is_ready", None)
+                ready = bool(checker()) if checker else True
+                self.send_json(
+                    {
+                        "request_id": self.new_request_id(),
+                        "status": "ready" if ready else "not_ready",
+                        "model_version": runtime_config.model_version,
+                    },
+                    status=200 if ready else 503,
+                )
+                return
+            request_id = self.new_request_id()
+            self.send_json(
+                error_payload(request_id, "not_found", "请求的资源不存在。"),
+                status=404,
+            )
 
         def do_POST(self):
-            if self.path != "/api/analyze":
-                status, content_type, data = json_bytes({"error": "Not found"}, status=404)
-                self.send_payload(status, content_type, data)
+            request_id = self.new_request_id()
+            if self.path not in {"/api/analyze", "/v1/analyze"}:
+                self.send_json(
+                    error_payload(request_id, "not_found", "请求的资源不存在。"),
+                    status=404,
+                )
                 return
 
             try:
+                if not bearer_token_is_valid(
+                    self.headers.get("Authorization"),
+                    runtime_config.api_token,
+                ):
+                    raise AnalysisError(
+                        401,
+                        "unauthorized",
+                        "缺少有效的访问凭证。",
+                    )
                 content_type = self.headers.get("Content-Type", "")
-                if content_type.startswith("multipart/form-data"):
-                    image_bytes, filename = read_multipart_image(self)
-                else:
+                try:
                     length = int(self.headers.get("Content-Length", "0"))
+                except ValueError as exc:
+                    raise AnalysisError(
+                        400,
+                        "invalid_request",
+                        "请求长度无效。",
+                    ) from exc
+                if length < 0:
+                    raise AnalysisError(
+                        400,
+                        "invalid_request",
+                        "请求长度无效。",
+                    )
+                body_limit = runtime_config.max_upload_bytes
+                if content_type.startswith("multipart/form-data"):
+                    body_limit += MULTIPART_OVERHEAD_BYTES
+                if length > body_limit:
+                    raise AnalysisError(
+                        413,
+                        "payload_too_large",
+                        "图片文件超过允许的大小。",
+                    )
+                if content_type.startswith("multipart/form-data"):
+                    try:
+                        image_bytes, filename = read_multipart_image(self)
+                    except ValueError as exc:
+                        raise AnalysisError(
+                            400,
+                            "missing_image",
+                            "请求中缺少有效的 image 图片字段。",
+                        ) from exc
+                else:
                     image_bytes = self.rfile.read(length)
                     filename = self.headers.get("X-File-Name", "upload")
-                payload = analyze_image_bytes(image_bytes, backend, filename)
-                status, content_type, data = json_bytes(payload)
-            except Exception as exc:
-                status, content_type, data = json_bytes(
-                    {"error": str(exc), "backend": backend.name},
-                    status=400,
+                outcome = analysis_service.analyze(
+                    image_bytes,
+                    filename,
+                    request_id,
                 )
-            self.send_payload(status, content_type, data)
+                if self.path == "/v1/analyze":
+                    self.send_json(outcome.public_payload)
+                else:
+                    self.send_json(
+                        outcome.legacy_payload,
+                        extra_headers={"Deprecation": "true"},
+                    )
+            except AnalysisError as exc:
+                self.send_json(
+                    error_payload(request_id, exc.code, exc.public_message),
+                    status=exc.status,
+                )
+            except Exception:
+                print(f"{request_id} status=500 code=internal_error")
+                self.send_json(
+                    error_payload(
+                        request_id,
+                        "internal_error",
+                        "服务暂时无法完成分析，请稍后重试。",
+                    ),
+                    status=500,
+                )
 
         def log_message(self, fmt, *args):
             print("%s - %s" % (self.address_string(), fmt % args))
@@ -143,6 +349,7 @@ def build_backend(
     bundle: Optional[str] = None,
     bundle_url: Optional[str] = None,
     bundle_cache: Optional[str] = None,
+    expected_sha256: Optional[str] = None,
 ):
     if name == "mock":
         return MockDetectorBackend()
@@ -151,6 +358,7 @@ def build_backend(
             checkpoint=checkpoint,
             model_url=model_url,
             cache_dir=Path(model_cache) if model_cache else None,
+            expected_sha256=expected_sha256,
         )
         return ShareGuardDetectorBackend(str(resolved), device=device)
     if name == "remote":
@@ -162,37 +370,92 @@ def build_backend(
             bundle_path=bundle,
             bundle_url=bundle_url,
             cache_dir=Path(bundle_cache) if bundle_cache else None,
+            expected_sha256=expected_sha256,
         )
         return NoisyShareFusionBundleBackend(str(resolved), device=device)
     raise ValueError(f"Unknown backend: {name}")
 
 
-def run_server(host: str, port: int, backend: DetectorBackend):
-    server = ThreadingHTTPServer((host, port), make_handler(backend))
+def run_server(
+    host: str,
+    port: int,
+    backend: DetectorBackend,
+    config: Optional[PlatformConfig] = None,
+    service: Optional[AnalysisService] = None,
+):
+    runtime_config = config or PlatformConfig()
+    analysis_service = service or AnalysisService(backend, runtime_config)
+    server = BoundedThreadingHTTPServer(
+        (host, port),
+        make_handler(backend, runtime_config, analysis_service),
+        max_workers=runtime_config.max_http_workers,
+    )
     print(f"ShareGuard platform running on http://{host}:{port}")
-    print(f"Backend: {backend.name}")
+    print(f"Mode: {runtime_config.mode}")
+    print(f"Model version: {runtime_config.model_version}")
     server.serve_forever()
 
 
-def main():
+def build_parser(
+    environ: Optional[Mapping[str, str]] = None,
+) -> argparse.ArgumentParser:
+    env = os.environ if environ is None else environ
     parser = argparse.ArgumentParser(description="Run ShareGuard demo platform")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument(
+        "--host",
+        default=env.get("SHAREGUARD_HOST", env.get("HOST", "127.0.0.1")),
+    )
+    parser.add_argument("--port", type=int, default=int(env.get("PORT", "7860")))
     parser.add_argument(
         "--backend",
         choices=["mock", "shareguard", "remote", "fusion-bundle"],
-        default="mock",
+        default=env.get("SHAREGUARD_BACKEND", "mock"),
     )
-    parser.add_argument("--checkpoint", default=None)
-    parser.add_argument("--model-url", default=None)
-    parser.add_argument("--model-cache", default=None)
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--remote-url", default=None)
-    parser.add_argument("--remote-token", default=None)
-    parser.add_argument("--bundle", default=None)
-    parser.add_argument("--bundle-url", default=None)
-    parser.add_argument("--bundle-cache", default=None)
-    args = parser.parse_args()
+    parser.add_argument("--checkpoint", default=env.get("CHECKPOINT"))
+    parser.add_argument("--model-url", default=env.get("MODEL_URL"))
+    parser.add_argument(
+        "--model-cache",
+        default=env.get("SHAREGUARD_MODEL_CACHE"),
+    )
+    parser.add_argument("--device", default=env.get("SHAREGUARD_DEVICE"))
+    parser.add_argument("--remote-url", default=env.get("REMOTE_URL"))
+    parser.add_argument("--remote-token", default=env.get("REMOTE_TOKEN"))
+    parser.add_argument("--bundle", default=env.get("BUNDLE"))
+    parser.add_argument("--bundle-url", default=env.get("BUNDLE_URL"))
+    parser.add_argument(
+        "--bundle-cache",
+        default=env.get("SHAREGUARD_MODEL_CACHE"),
+    )
+    return parser
+
+
+def validate_model_source(config: PlatformConfig, args) -> None:
+    if config.mode not in {"pilot", "production"}:
+        return
+    if config.mode == "production" and args.backend == "mock":
+        raise ValueError("mock backend is not allowed in production")
+    if args.backend == "fusion-bundle":
+        if args.bundle and Path(args.bundle).expanduser().is_dir():
+            raise ValueError(
+                "pilot and production require a verified archive or signed URL"
+            )
+        if not config.bundle_sha256:
+            raise ValueError(
+                "SHAREGUARD_BUNDLE_SHA256 is required for pilot or production archives"
+            )
+    if args.backend == "shareguard" and not config.bundle_sha256:
+        raise ValueError(
+            "SHAREGUARD_BUNDLE_SHA256 is required for pilot or production checkpoints"
+        )
+
+
+def main(argv=None, environ: Optional[Mapping[str, str]] = None):
+    env = os.environ if environ is None else environ
+    config = PlatformConfig.from_env(env)
+    config.validate()
+    parser = build_parser(env)
+    args = parser.parse_args(argv)
+    validate_model_source(config, args)
 
     backend = build_backend(
         args.backend,
@@ -205,8 +468,12 @@ def main():
         bundle=args.bundle,
         bundle_url=args.bundle_url,
         bundle_cache=args.bundle_cache,
+        expected_sha256=config.bundle_sha256,
     )
-    run_server(args.host, args.port, backend)
+    service = AnalysisService(backend, config)
+    if config.mode in {"pilot", "production"}:
+        service.warmup()
+    run_server(args.host, args.port, backend, config=config, service=service)
 
 
 if __name__ == "__main__":

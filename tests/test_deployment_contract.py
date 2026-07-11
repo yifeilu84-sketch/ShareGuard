@@ -1,0 +1,152 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from shareguard.platform.app import build_parser, validate_model_source
+from shareguard.platform.config import PlatformConfig
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class DeploymentContractTests(unittest.TestCase):
+    def test_parser_uses_environment_defaults_and_cli_overrides(self):
+        parser = build_parser({
+            "PORT": "9000",
+            "SHAREGUARD_BACKEND": "fusion-bundle",
+            "BUNDLE": "/models/shareguard-v1",
+        })
+
+        defaults = parser.parse_args([])
+        overridden = parser.parse_args(["--port", "9100", "--backend", "mock"])
+
+        self.assertEqual(defaults.port, 9000)
+        self.assertEqual(defaults.backend, "fusion-bundle")
+        self.assertEqual(defaults.bundle, "/models/shareguard-v1")
+        self.assertEqual(overridden.port, 9100)
+        self.assertEqual(overridden.backend, "mock")
+
+    def test_production_requires_verified_archive_and_rejects_directory_bundle(self):
+        config = PlatformConfig(mode="production", api_token="secret")
+        parser = build_parser({})
+        archive_args = parser.parse_args([
+            "--backend",
+            "fusion-bundle",
+            "--bundle",
+            "private-model.tar.gz",
+        ])
+
+        with self.assertRaisesRegex(ValueError, "SHAREGUARD_BUNDLE_SHA256"):
+            validate_model_source(config, archive_args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory_args = parser.parse_args([
+                "--backend",
+                "fusion-bundle",
+                "--bundle",
+                tmp,
+            ])
+            verified_config = PlatformConfig(
+                mode="production",
+                api_token="secret",
+                bundle_sha256="0" * 64,
+            )
+            with self.assertRaisesRegex(ValueError, "verified archive"):
+                validate_model_source(verified_config, directory_args)
+            validate_model_source(PlatformConfig(mode="local"), directory_args)
+
+    def test_pilot_archive_or_signed_url_requires_digest(self):
+        config = PlatformConfig(mode="pilot")
+        parser = build_parser({})
+
+        for args in [
+            parser.parse_args([
+                "--backend",
+                "fusion-bundle",
+                "--bundle",
+                "private-model.tar.gz",
+            ]),
+            parser.parse_args([
+                "--backend",
+                "fusion-bundle",
+                "--bundle-url",
+                "https://private.example/model.tar.gz",
+            ]),
+        ]:
+            with self.assertRaisesRegex(ValueError, "SHAREGUARD_BUNDLE_SHA256"):
+                validate_model_source(config, args)
+
+    def test_production_rejects_mock_backend(self):
+        config = PlatformConfig(mode="production", api_token="secret")
+        args = build_parser({}).parse_args(["--backend", "mock"])
+
+        with self.assertRaisesRegex(ValueError, "mock backend"):
+            validate_model_source(config, args)
+
+    def test_dockerfile_runs_non_root_and_has_healthcheck(self):
+        text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "pytorch/pytorch:2.12.1-cuda12.6-cudnn9-runtime@sha256:",
+            text,
+        )
+        self.assertIn("USER shareguard", text)
+        self.assertIn("HEALTHCHECK", text)
+        self.assertIn("/v1/ready", text)
+        self.assertIn("XDG_CACHE_HOME=/cache", text)
+        self.assertNotIn("COPY model_artifacts", text)
+
+    def test_dockerignore_excludes_private_artifacts_and_secrets(self):
+        text = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+        for pattern in ["model_artifacts", "*.tar.gz", ".env", "*.pem"]:
+            self.assertIn(pattern, text)
+
+    def test_pilot_environment_example_contains_names_not_secrets(self):
+        text = (
+            ROOT / "deploy" / "shareguard.pilot.env.example"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("SHAREGUARD_MODE=pilot", text)
+        self.assertIn("SHAREGUARD_BUNDLE_SHA256=", text)
+        self.assertIn("SHAREGUARD_API_TOKEN=", text)
+        self.assertIn("SHAREGUARD_MODEL_CACHE=/cache/models", text)
+        self.assertIn(
+            "BUNDLE=/models/shareguard-noisyshare-fusion-v1.tar.gz",
+            text,
+        )
+        self.assertIn("SHAREGUARD_DEVICE=cuda", text)
+        digest_setting = next(
+            line for line in text.splitlines()
+            if line.startswith("SHAREGUARD_BUNDLE_SHA256=")
+        )
+        self.assertEqual(digest_setting, "SHAREGUARD_BUNDLE_SHA256=")
+
+    def test_pilot_compose_mounts_model_read_only(self):
+        text = (
+            ROOT / "deploy" / "docker-compose.pilot.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("/models:ro", text)
+        self.assertIn("shareguard-cache:/cache", text)
+        self.assertIn('"127.0.0.1:${PORT:-7860}:7860"', text)
+        self.assertIn("gpus: all", text)
+        self.assertIn("env_file:", text)
+        self.assertIn("restart: unless-stopped", text)
+        self.assertIn("read_only: true", text)
+        self.assertIn("cap_drop:", text)
+        self.assertIn("- ALL", text)
+        self.assertIn("tmpfs:", text)
+
+    def test_ci_validates_container_and_compose_contract(self):
+        text = (
+            ROOT / ".github" / "workflows" / "platform-tests.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("docker build", text)
+        self.assertIn("docker compose", text)
+        self.assertIn("shareguard.pilot.env.example", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
