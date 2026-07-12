@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from shareguard.platform import app as platform_app
 from shareguard.platform.app import analyze_image_bytes, parse_multipart_image
 from shareguard.platform.backends import (
     DetectionResult,
@@ -119,45 +120,125 @@ class PlatformBackendTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             analyze_image_bytes(b"not an image", backend, "bad.bin")
 
+    def test_public_analysis_payload_hides_private_model_details(self):
+        payload = {
+            "file_name": "sample.png",
+            "label": "ai_generated",
+            "probability_ai_generated": 0.91,
+            "confidence": 0.82,
+            "risk_level": "high",
+            "backend": "noisyshare-fusion",
+            "image": {"width": 20, "height": 10, "mode": "RGB"},
+            "evidence": [
+                "bundle: C:/private/shareguard-noisyshare-fusion-v1",
+                "method: clip_b_l_score_fusion",
+                "alpha_clip_l: 0.63",
+                "threshold: 0.3216482140652624",
+            ],
+            "raw": {
+                "group_scores": {"clip_b": 0.88, "clip_l": 0.93},
+                "alpha_clip_l": 0.63,
+                "threshold": 0.3216482140652624,
+            },
+            "propagation_views": [],
+            "report": {
+                "subject": {"file_name": "sample.png", "backend": "noisyshare-fusion"},
+                "conclusion": "疑似AI生成",
+                "recommended_action": "进入人工复核",
+                "sections": [],
+                "review_notes": ["保留人工复核记录"],
+                "disclaimer": "技术辅助结论",
+            },
+        }
+
+        public = platform_app.public_analysis_payload(payload)
+        serialized = json.dumps(public, ensure_ascii=False).lower()
+
+        self.assertEqual(public["backend"], "private-inference")
+        self.assertEqual(public["report"]["subject"]["backend"], "private-inference")
+        self.assertNotIn("raw", public)
+        self.assertNotIn("evidence", public)
+        for private_marker in (
+            "group_scores",
+            "alpha_clip_l",
+            "threshold",
+            "clip_b_l_score_fusion",
+            "c:/private",
+            "bundle:",
+        ):
+            self.assertNotIn(private_marker, serialized)
+
+    def test_static_path_resolution_serves_assets_without_traversal(self):
+        css_path = platform_app.resolve_static_path("/dossier.css")
+
+        self.assertIsNotNone(css_path)
+        self.assertEqual(css_path.name, "dossier.css")
+        self.assertIsNone(platform_app.resolve_static_path("/../app.py"))
+        self.assertIsNone(platform_app.resolve_static_path("/%2e%2e/app.py"))
+
     def test_static_page_exposes_business_report_export_actions(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+        static_dir = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static_dir / "index.html").read_text(encoding="utf-8")
+        javascript = (static_dir / "dossier.js").read_text(encoding="utf-8")
 
         self.assertIn('id="saveHtmlReportButton"', html)
         self.assertIn('id="printReportButton"', html)
         self.assertIn('id="downloadJsonButton"', html)
-        self.assertIn("function buildReportHtml", html)
-        self.assertIn("ShareGuard影像鉴真报告", html)
+        self.assertIn('id="sealButton"', html)
+        self.assertIn("function buildReportHtml", javascript)
+        self.assertIn("async function createEvidencePackage", javascript)
 
     def test_static_page_exposes_competition_judge_workflows(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+        static_dir = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static_dir / "index.html").read_text(encoding="utf-8")
+        javascript = (static_dir / "dossier.js").read_text(encoding="utf-8")
 
-        self.assertIn("评委快速理解入口", html)
-        self.assertIn("痛点-技术-产品-落地", html)
-        self.assertIn("创新性", html)
-        self.assertIn("社会价值", html)
-        self.assertIn("商业性", html)
-        self.assertIn("媒体发布前核验", html)
-        self.assertIn("品牌谣言澄清", html)
-        self.assertIn("平台人工复核", html)
-        self.assertIn("const sampleCases", html)
-        self.assertIn("function loadSampleCase", html)
-        self.assertIn("function renderCaseContext", html)
+        self.assertIn("全局雷达", html)
+        self.assertIn("当前案宗", html)
+        self.assertIn("保全日志", html)
+        self.assertIn("强制放行", html)
+        self.assertIn("签封并导出", html)
+        self.assertIn("物证开箱校验器", (static_dir / "verifier.html").read_text(encoding="utf-8"))
+        self.assertIn("const sampleCases", javascript)
+        self.assertIn("setupForensicCanvas", javascript)
+        self.assertIn("new Worker(\"crypto-worker.js\")", javascript)
 
     def test_static_page_supports_github_pages_demo_fallback(self):
-        html = (Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static" / "index.html").read_text(
-            encoding="utf-8"
-        )
+        static_dir = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        javascript = (static_dir / "dossier.js").read_text(encoding="utf-8")
 
-        self.assertIn("GitHub Pages 静态演示", html)
-        self.assertIn("static-demo", html)
-        self.assertIn("function buildStaticDemoPayload", html)
-        self.assertIn("function shouldUseStaticDemo", html)
-        self.assertIn("function makeStaticPropagationViews", html)
-        self.assertIn("function buildStaticReport", html)
+        self.assertIn("static-demo", javascript)
+        self.assertIn("function buildStaticDemoPayload", javascript)
+        self.assertIn("function shouldUseStaticDemo", javascript)
+        self.assertIn("function makeStaticPropagationViews", javascript)
+        self.assertIn("function buildStaticReport", javascript)
+
+    def test_static_bundle_contains_complete_dossier_frontend(self):
+        static_dir = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        expected = {
+            "index.html",
+            "dossier.css",
+            "dossier.js",
+            "i18n.js",
+            "crypto-worker.js",
+            "verifier.html",
+            "verifier.js",
+            "assets/flagship-event.jpg",
+        }
+        actual = {
+            path.relative_to(static_dir).as_posix()
+            for path in static_dir.rglob("*")
+            if path.is_file()
+        }
+
+        self.assertTrue(expected.issubset(actual), expected - actual)
+
+    def test_static_pages_declare_a_favicon(self):
+        static_dir = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+
+        for page_name in ("index.html", "verifier.html"):
+            html = (static_dir / page_name).read_text(encoding="utf-8")
+            self.assertIn('rel="icon"', html, page_name)
 
     def test_github_pages_workflow_deploys_static_platform(self):
         workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pages.yml"

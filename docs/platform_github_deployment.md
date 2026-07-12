@@ -158,19 +158,22 @@ field: image
   "probability_ai_generated": 0.91,
   "confidence": 0.82,
   "risk_level": "high",
-  "backend": "noisyshare-fusion",
+  "decision": "hold",
+  "uncertainty": "中等",
+  "backend": "private-inference",
   "image": {"width": 512, "height": 512, "mode": "RGB"},
-  "evidence": [
-    "bundle: /models/shareguard-noisyshare-fusion-v1",
-    "method: clip_b_l_score_fusion"
-  ],
-  "raw": {
-    "group_scores": {"clip_b": 0.88, "clip_l": 0.93},
-    "threshold": 0.72,
-    "alpha_clip_l": 0.63
+  "propagation_views": [],
+  "report": {
+    "conclusion": "疑似AI生成",
+    "summary": "疑似AI生成。系统给出 91.0% 的AI生成风险，置信度为 82.0%。",
+    "recommended_action": "进入人工复核流程。",
+    "notes": ["建议保留来源和人工复核记录。"],
+    "disclaimer": "该结果为技术辅助风险信号，不替代司法鉴定或来源调查。"
   }
 }
 ```
+
+公开 API 只返回产品级结论。模型包路径、子模型分数、融合权重、阈值、`raw` 字段与调试证据不得离开私有推理服务。GitHub Pages 仅发布静态工作流演示；真实模型通过同源 `/api/analyze` 接入，默认不允许任意跨域站点读取结果。
 
 ## 比赛 Demo 推荐部署顺序
 

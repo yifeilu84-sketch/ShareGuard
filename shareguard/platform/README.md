@@ -107,6 +107,7 @@ python -m shareguard.platform.app \
 - `Dockerfile`
 - `requirements-platform.txt`
 - `shareguard/platform/*`
+- `shareguard/platform/static/` 下的数字案宗前端、Web Worker 与独立验证器
 - `scripts/export_noisyshare_fusion_bundle.py`
 - `docs/platform_github_deployment.md`
 - `tests/test_platform_backend.py`
@@ -140,23 +141,33 @@ field: image
   "probability_ai_generated": 0.91,
   "confidence": 0.82,
   "risk_level": "high",
-  "backend": "noisyshare-fusion",
+  "decision": "hold",
+  "uncertainty": "中等",
+  "backend": "private-inference",
   "image": {
     "width": 512,
     "height": 512,
     "mode": "RGB"
   },
-  "evidence": [
-    "bundle: /models/shareguard-noisyshare-fusion-v1",
-    "method: clip_b_l_score_fusion"
-  ],
-  "raw": {
-    "probability": 0.91,
-    "prediction": "fake",
-    "threshold": 0.5
+  "propagation_views": [],
+  "report": {
+    "conclusion": "疑似AI生成",
+    "summary": "疑似AI生成。系统给出 91.0% 的AI生成风险，置信度为 82.0%。",
+    "recommended_action": "进入人工复核流程。",
+    "notes": ["建议保留来源和人工复核记录。"],
+    "disclaimer": "该结果为技术辅助风险信号，不替代司法鉴定或来源调查。"
   }
 }
 ```
+
+公开 HTTP 响应采用字段白名单。以下信息只能保留在私有推理进程内，不得返回浏览器：
+
+- checkpoint、模型包路径与下载地址；
+- 子模型分数、融合权重和决策阈值；
+- `raw` 推理结构与内部调试证据；
+- 远程推理凭据、令牌和服务拓扑。
+
+GitHub Pages 只发布 `shareguard/platform/static/`，自动使用静态演示数据，不加载模型。连接真实模型时，网页与 `/api/analyze` 必须部署在同一受控域名下；默认服务不开放跨域读取。
 
 ## 重要注意事项
 
