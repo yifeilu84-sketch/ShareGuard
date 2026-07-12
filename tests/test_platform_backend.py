@@ -247,6 +247,7 @@ class PlatformBackendTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("actions/deploy-pages", content)
         self.assertIn("shareguard/platform/static", content)
+        self.assertIn("enablement: true", content)
 
     def test_parse_multipart_image_extracts_upload_field(self):
         boundary = "----shareguard-test-boundary"
