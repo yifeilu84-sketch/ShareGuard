@@ -234,7 +234,7 @@ p {
 
 .command-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 52px 110px;
+  grid-template-columns: minmax(0, 1fr) 132px 52px 110px;
   align-items: stretch;
   min-width: 0;
 }
@@ -271,6 +271,39 @@ p {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 700;
+}
+
+.model-connection-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px;
+  border-width: 0 0 0 1px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.model-connection-indicator {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  background: var(--caution);
+}
+
+.model-connection-button[data-state="connected"] .model-connection-indicator {
+  background: var(--credible);
+}
+
+.model-connection-button[data-state="error"] .model-connection-indicator {
+  background: var(--risk);
+}
+
+.model-connection-button[data-state="connecting"] .model-connection-indicator {
+  animation: analysis-tick 700ms steps(2, end) infinite;
 }
 
 .state-block {
@@ -1507,6 +1540,114 @@ dialog::backdrop {
   margin-top: 20px;
 }
 
+.model-connection-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-width: none;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.model-connection-dialog form {
+  display: grid;
+  gap: 18px;
+  padding: 0 24px 24px;
+}
+
+.model-connection-dialog header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 -24px;
+  padding: 20px 24px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.model-connection-dialog header span,
+.model-connection-dialog label > span,
+.model-privacy-note,
+.model-connection-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.model-connection-dialog header span {
+  color: var(--credible);
+}
+
+.model-connection-dialog h2 {
+  margin: 6px 0 0;
+  font-family: var(--font-serif);
+  font-size: 30px;
+  line-height: 1.05;
+}
+
+.dialog-icon-button {
+  flex: 0 0 44px;
+  width: 44px;
+  padding: 0;
+  border-width: 0 0 0 1px;
+  font-family: var(--font-mono);
+  font-size: 22px;
+}
+
+.model-connection-dialog > form > p {
+  margin: 0;
+}
+
+.model-connection-dialog label {
+  display: grid;
+  gap: 7px;
+}
+
+.model-connection-dialog input {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.model-connection-dialog input[readonly] {
+  color: var(--ink-soft);
+  background: var(--paper-deep);
+}
+
+.model-credential-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .72fr) minmax(0, 1.28fr);
+  gap: 12px;
+}
+
+.model-privacy-note {
+  padding-left: 12px;
+  border-left: 3px solid var(--credible);
+  color: var(--ink-soft);
+  line-height: 1.6;
+}
+
+.model-connection-status {
+  min-height: 20px;
+  color: var(--ink-soft);
+}
+
+.model-connection-status[data-state="connected"] {
+  color: var(--credible);
+}
+
+.model-connection-status[data-state="error"] {
+  color: var(--risk);
+}
+
+.model-connection-dialog footer {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 8px;
+  padding-top: 4px;
+}
+
 .toast {
   position: fixed;
   right: 16px;
@@ -2016,7 +2157,7 @@ body.is-analyzing .engine-state .state-block {
   }
 
   .command-actions {
-    grid-template-columns: 52px 1fr;
+    grid-template-columns: 132px 52px 1fr;
   }
 
   .command-button {
@@ -2119,7 +2260,9 @@ body.is-analyzing .engine-state .state-block {
 
   .risk-register,
   .report-actions,
-  .release-dialog form > div {
+  .release-dialog form > div,
+  .model-credential-grid,
+  .model-connection-dialog footer {
     grid-template-columns: 1fr;
   }
 

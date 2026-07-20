@@ -1,7 +1,8 @@
 param(
     [switch]$AccessProtected,
     [switch]$PasswordProtected,
-    [switch]$Offline
+    [switch]$Offline,
+    [string]$AllowedOrigin = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,6 +74,7 @@ $Inference = Start-Process `
     gateway_pid = $null
     access_protected = $AccessProtected.IsPresent
     password_protected = $PasswordProtected.IsPresent
+    allowed_origin = $AllowedOrigin.Trim().TrimEnd("/")
     started_at = [DateTime]::UtcNow.ToString("o")
 } | ConvertTo-Json | Set-Content -LiteralPath $PidFile -Encoding ascii
 
@@ -105,6 +107,9 @@ if ($AccessProtected) {
 }
 if ($PasswordProtected) {
     $GatewayArgs += "-PasswordProtected"
+}
+if ($AllowedOrigin) {
+    $GatewayArgs += @("-AllowedOrigin", $AllowedOrigin.Trim().TrimEnd("/"))
 }
 $Gateway = Start-Process `
     -FilePath "powershell.exe" `
@@ -151,6 +156,7 @@ if (-not $GatewayReady) {
     gateway_pid = $Gateway.Id
     access_protected = $AccessProtected.IsPresent
     password_protected = $PasswordProtected.IsPresent
+    allowed_origin = $AllowedOrigin.Trim().TrimEnd("/")
     started_at = [DateTime]::UtcNow.ToString("o")
 } | ConvertTo-Json | Set-Content -LiteralPath $PidFile -Encoding ascii
 

@@ -4,8 +4,8 @@
 
 ShareGuard 使用三个彼此隔离的产品表面：
 
-1. GitHub Pages 只展示明确标识的静态示例，不调用真实模型。
-2. 邀请制 Web 工作台与真实 API 同源部署，并由外层访问网关限制访问者。
+1. GitHub Pages 发布安全前端；静态案例不调用模型，用户授权后可连接受保护的私有推理网关。
+2. 私有推理网关只允许精确配置的 Pages Origin，并对就绪检查和每次推理执行访问鉴权。
 3. 私有 GPU 服务加载模型并返回产品级决策，不向客户端返回模型内部参数。
 
 HPC 只负责训练、评估和导出模型。GitHub 保存源代码、测试和容器配置，不保存权重、私有下载地址、API Token、客户图片或真实环境文件。
@@ -28,6 +28,25 @@ python -m shareguard.platform.app
 ```
 
 打开 `http://127.0.0.1:7860`。Mock 结果只验证页面和接口，不代表真实检测结论。
+
+## GitHub Pages 连接本机私有模型
+
+公开仓库只包含 `shareguard/platform/static/runtime-config.js` 中的 HTTPS 网关地址。该地址不是凭证；用户名、密码、内部 API Token、模型路径和权重均不进入 Git。Pages 端的访问密码只保存在当前页面的 JavaScript 内存中，刷新或关闭页面后清除。
+
+本机启动时将 Pages Origin 加入精确白名单：
+
+```powershell
+.\scripts\local\start_protected_platform.ps1 `
+  -PasswordProtected `
+  -Offline `
+  -AllowedOrigin "https://yifeilu84-sketch.github.io"
+
+.\scripts\local\publish_quick_tunnel.ps1
+```
+
+Quick Tunnel 适合临时评审演示：本机、网关和 tunnel 进程必须保持运行，URL 会在 tunnel 重建后变化。获得新 URL 后，只更新 `runtime-config.js` 与页面 CSP 的 `connect-src`，不要提交 `secrets/`。长期试点应改用固定域名的命名 Tunnel 或云端私有网关。
+
+浏览器的 CORS 预检不携带凭证，因此网关只对经过 Origin、路由、方法和请求头白名单检查的 `OPTIONS` 返回许可；实际 `/v1/ready` 与 `/v1/analyze` 仍要求鉴权。
 
 ## 私有试点容器
 
@@ -89,7 +108,7 @@ field: image
 ## 隐私与运行边界
 
 - 默认在内存中处理图片，不持久化原图。
-- 默认禁止跨域；只有精确命中 `SHAREGUARD_ALLOWED_ORIGINS` 才返回 CORS 许可头。
+- 默认禁止跨域；只有精确命中 `SHAREGUARD_ALLOWED_ORIGINS` 才返回 CORS 许可头，预检不会绕过实际接口鉴权。
 - 单图默认上限 10 MiB、2500 万像素，仅接受 JPEG、PNG 和 WebP。
 - GPU 默认只并行执行一个推理任务，等待队列默认最多八个请求。
 - HTTP 请求线程默认最多十六个，避免图片解码流量无限创建线程。

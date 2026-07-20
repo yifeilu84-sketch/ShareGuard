@@ -300,6 +300,73 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(payload["error"]["code"], "origin_not_allowed")
 
+    def test_allowed_cors_preflight_does_not_require_basic_auth(self):
+        config = PlatformConfig(
+            allowed_origins=("https://yifeilu84-sketch.github.io",),
+            http_basic_username="shareguard-demo",
+            http_basic_password="correct-horse-battery-staple",
+        )
+        server = self.start_server(MockDetectorBackend(), config)
+
+        status, payload, headers = self.request(
+            "OPTIONS",
+            "/v1/analyze",
+            headers={
+                "Origin": "https://yifeilu84-sketch.github.io",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": (
+                    "authorization, content-type, accept-language"
+                ),
+            },
+            server=server,
+        )
+
+        self.assertEqual(status, 204)
+        self.assertIsNone(payload)
+        self.assertNotIn("WWW-Authenticate", headers)
+        self.assertEqual(
+            headers.get("Access-Control-Allow-Origin"),
+            "https://yifeilu84-sketch.github.io",
+        )
+        self.assertIn(
+            "Authorization",
+            headers.get("Access-Control-Allow-Headers", ""),
+        )
+        self.assertIn(
+            "Accept-Language",
+            headers.get("Access-Control-Allow-Headers", ""),
+        )
+
+    def test_preflight_rejects_unapproved_headers_and_routes(self):
+        header_status, header_payload, _ = self.request(
+            "OPTIONS",
+            "/v1/analyze",
+            headers={
+                "Origin": "https://pilot.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-private-debug",
+            },
+        )
+        route_status, route_payload, _ = self.request(
+            "OPTIONS",
+            "/admin",
+            headers={
+                "Origin": "https://pilot.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        self.assertEqual(header_status, 403)
+        self.assertEqual(
+            header_payload["error"]["code"],
+            "preflight_headers_not_allowed",
+        )
+        self.assertEqual(route_status, 405)
+        self.assertEqual(
+            route_payload["error"]["code"],
+            "preflight_not_allowed",
+        )
+
     def test_security_headers_are_present(self):
         _, _, headers = self.request("GET", "/v1/health")
 
@@ -329,6 +396,7 @@ class PlatformHttpTests(unittest.TestCase):
             "/dossier.css": "text/css; charset=utf-8",
             "/dossier.js": "application/javascript; charset=utf-8",
             "/i18n.js": "application/javascript; charset=utf-8",
+            "/runtime-config.js": "application/javascript; charset=utf-8",
             "/crypto-worker.js": "application/javascript; charset=utf-8",
             "/verifier.html": "text/html; charset=utf-8",
             "/verifier.js": "application/javascript; charset=utf-8",

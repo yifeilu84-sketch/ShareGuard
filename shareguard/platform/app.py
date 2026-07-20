@@ -37,6 +37,7 @@ STATIC_ASSET_ROUTES = {
     "/dossier.css": ("dossier.css", "text/css; charset=utf-8"),
     "/dossier.js": ("dossier.js", "application/javascript; charset=utf-8"),
     "/i18n.js": ("i18n.js", "application/javascript; charset=utf-8"),
+    "/runtime-config.js": ("runtime-config.js", "application/javascript; charset=utf-8"),
     "/crypto-worker.js": ("crypto-worker.js", "application/javascript; charset=utf-8"),
     "/verifier.html": ("verifier.html", "text/html; charset=utf-8"),
     "/verifier.js": ("verifier.js", "application/javascript; charset=utf-8"),
@@ -122,7 +123,12 @@ def parse_multipart_image(content_type: str, body: bytes):
 
 
 def read_multipart_image(handler: BaseHTTPRequestHandler):
-    length = int(handler.headers.get("Content-Length", "0"))
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError as exc:
+        raise ValueError("Invalid Content-Length header") from exc
+    if length <= 0:
+        raise ValueError("Uploaded image is empty")
     body = handler.rfile.read(length)
     return parse_multipart_image(handler.headers.get("Content-Type", ""), body)
 
@@ -285,16 +291,62 @@ def make_handler(
             return False
 
         def do_OPTIONS(self):
-            if not self.require_http_basic_auth():
-                return
             request_id = self.new_request_id()
+            request_path = self.path.split("?", 1)[0]
             origin = self.headers.get("Origin")
-            if origin and not runtime_config.is_origin_allowed(origin):
+            if not runtime_config.is_origin_allowed(origin):
                 self.send_json(
                     error_payload(
                         request_id,
                         "origin_not_allowed",
                         "该来源不允许跨域访问此服务。",
+                    ),
+                    status=403,
+                )
+                return
+            allowed_methods = {
+                "/v1/ready": {"GET"},
+                "/v1/health": {"GET"},
+                "/v1/analyze": {"POST"},
+                "/api/analyze": {"POST"},
+            }
+            requested_method = self.headers.get(
+                "Access-Control-Request-Method",
+                "",
+            ).strip().upper()
+            if (
+                request_path not in allowed_methods
+                or requested_method not in allowed_methods[request_path]
+            ):
+                self.send_json(
+                    error_payload(
+                        request_id,
+                        "preflight_not_allowed",
+                        "该跨域请求方法不受支持。",
+                    ),
+                    status=405,
+                )
+                return
+            allowed_headers = {
+                "accept-language",
+                "authorization",
+                "content-type",
+                "x-file-name",
+            }
+            requested_headers = {
+                item.strip().lower()
+                for item in self.headers.get(
+                    "Access-Control-Request-Headers",
+                    "",
+                ).split(",")
+                if item.strip()
+            }
+            if not requested_headers.issubset(allowed_headers):
+                self.send_json(
+                    error_payload(
+                        request_id,
+                        "preflight_headers_not_allowed",
+                        "该跨域请求头不受支持。",
                     ),
                     status=403,
                 )
@@ -306,7 +358,8 @@ def make_handler(
                 extra_headers={
                     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                     "Access-Control-Allow-Headers": (
-                        "Authorization, Content-Type, X-File-Name"
+                        "Authorization, Content-Type, X-File-Name, "
+                        "Accept-Language"
                     ),
                     "Access-Control-Max-Age": "600",
                 },

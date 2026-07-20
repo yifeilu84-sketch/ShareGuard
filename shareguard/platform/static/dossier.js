@@ -3,6 +3,15 @@
 const DEFAULT_CASE_ID = "geopolitical";
 const EMBED_MEDIA_LIMIT_BYTES = 8 * 1024 * 1024;
 const i18n = window.ShareGuardI18n;
+const runtimeConfig = window.ShareGuardRuntime || {};
+const modelConnection = {
+  apiBaseUrl: normalizeApiBaseUrl(runtimeConfig.apiBaseUrl),
+  username: "",
+  password: "",
+  connected: false,
+  pendingAnalysis: false,
+  status: "idle"
+};
 
 const sampleCases = [
   {
@@ -202,7 +211,10 @@ function cacheDom() {
     "openReviewerButton", "reviewerImage", "reviewerTitle", "reviewerVerdict",
     "reviewerNarrative", "reviewForm", "reviewerComment", "reviewThread",
     "sealDialog", "sealTitle", "sealLog", "sealResult", "downloadSgdButton",
-    "releaseDialog", "confirmReleaseButton", "dropOverlay", "toast"
+    "releaseDialog", "confirmReleaseButton", "dropOverlay", "toast",
+    "modelConnectionButton", "modelConnectionLabel", "modelConnectionDialog",
+    "modelConnectionForm", "modelEndpoint", "modelUsername", "modelPassword",
+    "modelConnectionStatus", "modelDisconnectButton", "closeModelConnectionButton"
   ].forEach((id) => {
     dom[id] = document.getElementById(id);
   });
@@ -216,6 +228,8 @@ function init() {
   bindReportControls();
   bindReviewerControls();
   bindDialogControls();
+  bindModelConnectionControls();
+  renderModelConnectionState();
   renderCasePicker();
   renderWaterfall();
   renderCustodyLog();
@@ -395,10 +409,22 @@ async function handleFile(file) {
 async function analyzeCurrentFile() {
   document.body.classList.add("is-analyzing");
   dom.stageStatusLabel.textContent = t("evidence.building", "正在形成证据链");
+  let analysisCompleted = false;
   try {
     if (shouldUseStaticDemo()) {
       setAnalysisPayload(await buildStaticDemoPayload());
       dom.engineLabel.textContent = t("engine.demo", "产品演示模式，当前结果仅展示工作流");
+      analysisCompleted = true;
+      return;
+    }
+
+    if (usesRemoteModel() && !modelConnection.connected) {
+      modelConnection.pendingAnalysis = true;
+      renderAnalysisUnavailable(t("model.waiting", "等待连接私有模型后开始真实分析。"));
+      openModelConnectionDialog({
+        state: "idle",
+        message: t("model.authorizationRequired", "请输入演示凭证以启动这张影像的真实模型分析。")
+      });
       return;
     }
 
@@ -409,11 +435,39 @@ async function analyzeCurrentFile() {
       const blob = await dataUrlToBlob(state.currentDataUrl);
       body.append("image", blob, "flagship-event.jpg");
     }
-    const response = await fetch("/api/analyze", {
+    const requestOptions = {
       method: "POST",
       body,
-      headers: { "Accept-Language": i18n?.getLocale() || "zh-CN" }
-    });
+      headers: { "Accept-Language": i18n?.getLocale() || "zh-CN" },
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer"
+    };
+    if (usesRemoteModel()) {
+      requestOptions.mode = "cors";
+      requestOptions.headers.Authorization = basicAuthorization(
+        modelConnection.username,
+        modelConnection.password
+      );
+    }
+    const response = await fetch(
+      usesRemoteModel() ? privateApiUrl("/v1/analyze") : "/v1/analyze",
+      requestOptions
+    );
+    if (response.status === 401 && usesRemoteModel()) {
+      modelConnection.username = "";
+      modelConnection.password = "";
+      modelConnection.connected = false;
+      modelConnection.pendingAnalysis = true;
+      modelConnection.status = "error";
+      renderModelConnectionState();
+      renderAnalysisUnavailable(t("model.invalid", "账号或密码无效，请重新输入。"));
+      openModelConnectionDialog({
+        state: "error",
+        message: t("model.invalid", "账号或密码无效，请重新输入。")
+      });
+      return;
+    }
     if (!response.ok) {
       throw new Error(`分析服务返回 ${response.status}`);
     }
@@ -427,22 +481,122 @@ async function analyzeCurrentFile() {
       setAnalysisPayload(await buildStaticDemoPayload());
       dom.engineLabel.textContent = t("engine.demo", "产品演示模式，当前结果仅展示工作流");
       showToast(t("toast.demo", "当前服务处于产品演示模式，结论用于展示工作流，不代表对上传文件的真实鉴定。"));
+      analysisCompleted = true;
     } else {
       setAnalysisPayload(payload);
-      dom.engineLabel.textContent = t("engine.private", "私有模型服务已连接，仅返回产品级结论");
+      analysisCompleted = true;
+      if (usesRemoteModel()) {
+        modelConnection.status = "connected";
+        modelConnection.connected = true;
+        renderModelConnectionState();
+      } else {
+        dom.engineLabel.textContent = t("engine.private", "私有模型服务已连接，仅返回产品级结论");
+      }
     }
   } catch (error) {
-    setAnalysisPayload(await buildStaticDemoPayload());
-    dom.engineLabel.textContent = t("engine.demo", "产品演示模式，当前结果仅展示工作流");
-    showToast(`${t("toast.serviceFallback", "私有分析服务暂不可用，已切换至产品演示结果。")}${error?.message ? ` ${error.message}` : ""}`);
+    if (usesRemoteModel()) {
+      modelConnection.username = "";
+      modelConnection.password = "";
+      modelConnection.connected = false;
+      modelConnection.pendingAnalysis = true;
+      modelConnection.status = "error";
+      renderModelConnectionState();
+      renderAnalysisUnavailable(t("model.analysisUnavailable", "真实模型未返回结果，请检查本机服务或稍后重试。"));
+      showToast(`${t("model.analysisUnavailable", "真实模型未返回结果，请检查本机服务或稍后重试。")}${error?.message ? ` ${error.message}` : ""}`);
+    } else {
+      setAnalysisPayload(await buildStaticDemoPayload());
+      dom.engineLabel.textContent = t("engine.demo", "产品演示模式，当前结果仅展示工作流");
+      showToast(`${t("toast.serviceFallback", "私有分析服务暂不可用，已切换至产品演示结果。")}${error?.message ? ` ${error.message}` : ""}`);
+      analysisCompleted = true;
+    }
   } finally {
     document.body.classList.remove("is-analyzing");
-    dom.stageStatusLabel.textContent = t("evidence.chainReady", "传播链路已识别");
+    dom.stageStatusLabel.textContent = analysisCompleted
+      ? t("evidence.chainReady", "传播链路已识别")
+      : t("model.noFinding", "尚未生成真实模型结论");
   }
 }
 
 function shouldUseStaticDemo() {
-  return window.location.protocol === "file:" || /\.github\.io$/i.test(window.location.hostname);
+  return window.location.protocol === "file:" || (isGithubPages() && !usesRemoteModel());
+}
+
+function isGithubPages() {
+  return /\.github\.io$/i.test(window.location.hostname);
+}
+
+function usesRemoteModel() {
+  if (!isGithubPages() || !modelConnection.apiBaseUrl) return false;
+  const allowedOrigin = normalizePageOrigin(runtimeConfig.allowedPageOrigin);
+  return !allowedOrigin || allowedOrigin === window.location.origin;
+}
+
+function normalizePageOrigin(value) {
+  if (!value) return "";
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === "https:" ? parsed.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeApiBaseUrl(value) {
+  if (!value) return "";
+  try {
+    const parsed = new URL(String(value));
+    if (
+      parsed.protocol !== "https:"
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+    ) {
+      return "";
+    }
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+function privateApiUrl(path) {
+  return new URL(path, `${modelConnection.apiBaseUrl}/`).toString();
+}
+
+function basicAuthorization(username, password) {
+  const bytes = new TextEncoder().encode(`${username}:${password}`);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return `Basic ${window.btoa(binary)}`;
+}
+
+function renderAnalysisUnavailable(message) {
+  narrativeAnimationToken += 1;
+  state.activePayload = null;
+  renderViews({
+    propagation_views: [{
+      id: "current",
+      label: t("view.current", "当前版本"),
+      data_url: state.currentDataUrl,
+      size: "AWAITING MODEL",
+      filter: "grayscale(1) contrast(1.08)"
+    }]
+  });
+  dom.decisionPanel.dataset.decision = "review";
+  dom.decisionTitle.innerHTML = `${escapeHtml(t("model.noDecisionEn", "MODEL OFFLINE"))}<br><em>${escapeHtml(t("model.noDecision", "尚无鉴真结论"))}</em>`;
+  dom.riskProbability.textContent = "—";
+  dom.confidenceValue.textContent = "—";
+  dom.uncertaintyValue.textContent = "—";
+  dom.recommendedAction.textContent = t("model.connectAction", "连接私有模型后重新分析");
+  dom.machineNarrative.textContent = message;
+  dom.evidenceList.innerHTML = "";
+  dom.forceReleaseButton.disabled = true;
+  dom.sealButton.disabled = true;
+  dom.reviewerVerdict.textContent = t("model.noDecisionEn", "MODEL OFFLINE");
+  dom.reviewerNarrative.textContent = message;
 }
 
 async function buildStaticDemoPayload(options = {}) {
@@ -507,6 +661,8 @@ function setAnalysisPayload(payload) {
   renderReviewer(normalized);
   updateCustodySummary(normalized);
   resizeForensicCanvas();
+  dom.forceReleaseButton.disabled = false;
+  dom.sealButton.disabled = false;
 }
 
 function normalizePayload(payload) {
@@ -528,7 +684,11 @@ function normalizePayload(payload) {
       summary: String(report.summary || caseText(state.activeCase, "summary")),
       recommended_action: String(report.recommended_action || caseText(state.activeCase, "action")),
       sections: Array.isArray(report.sections) ? report.sections : buildStaticReport(state.activeCase).sections,
-      notes: Array.isArray(report.notes) ? report.notes : [...state.activeCase.evidence],
+      notes: Array.isArray(report.notes)
+        ? report.notes
+        : Array.isArray(report.review_notes)
+          ? report.review_notes
+          : [...state.activeCase.evidence],
       disclaimer: String(report.disclaimer || "该结果为技术辅助风险信号，不替代司法鉴定或来源调查。")
     },
     propagation_views: Array.isArray(payload.propagation_views) && payload.propagation_views.length
@@ -1077,6 +1237,183 @@ function bindDialogControls() {
   });
 }
 
+function bindModelConnectionControls() {
+  dom.modelEndpoint.value = modelConnection.apiBaseUrl || window.location.origin;
+  dom.modelConnectionButton.hidden = !usesRemoteModel();
+  dom.modelConnectionButton.addEventListener("click", () => {
+    openModelConnectionDialog();
+  });
+  dom.closeModelConnectionButton.addEventListener("click", () => {
+    dom.modelPassword.value = "";
+    dom.modelConnectionDialog.close();
+  });
+  dom.modelConnectionDialog.addEventListener("cancel", () => {
+    dom.modelPassword.value = "";
+  });
+  dom.modelConnectionForm.addEventListener("submit", connectPrivateModel);
+  dom.modelDisconnectButton.addEventListener("click", disconnectPrivateModel);
+}
+
+function openModelConnectionDialog(options = {}) {
+  if (!usesRemoteModel()) return;
+  dom.modelEndpoint.value = modelConnection.apiBaseUrl;
+  if (!dom.modelUsername.value) {
+    dom.modelUsername.value = modelConnection.username || "shareguard-demo";
+  }
+  if (options.message) {
+    setModelConnectionStatus(options.state || "idle", options.message);
+  }
+  if (!dom.modelConnectionDialog.open) {
+    dom.modelConnectionDialog.showModal();
+  }
+  window.setTimeout(() => dom.modelPassword.focus(), 0);
+}
+
+async function connectPrivateModel(event) {
+  event.preventDefault();
+  if (!usesRemoteModel()) return;
+  const username = dom.modelUsername.value.trim();
+  const password = dom.modelPassword.value;
+  if (!username || !password) {
+    setModelConnectionStatus("error", t("model.credentialsRequired", "请输入演示账号和访问密码。"));
+    return;
+  }
+
+  const submitButton = dom.modelConnectionForm.querySelector('[type="submit"]');
+  submitButton.disabled = true;
+  modelConnection.status = "connecting";
+  renderModelConnectionState();
+  setModelConnectionStatus("connecting", t("model.connecting", "正在验证私有模型网关…"));
+
+  try {
+    const response = await fetch(privateApiUrl("/v1/ready"), {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        "Authorization": basicAuthorization(username, password)
+      },
+      cache: "no-store",
+      credentials: "omit",
+      mode: "cors",
+      referrerPolicy: "no-referrer"
+    });
+    if (response.status === 401) {
+      throw new ModelConnectionError(
+        "credentials",
+        t("model.invalid", "账号或密码无效，请重新输入。")
+      );
+    }
+    if (!response.ok) {
+      throw new ModelConnectionError(
+        "gateway",
+        `${t("model.unavailable", "私有模型网关暂不可用。")} HTTP ${response.status}`
+      );
+    }
+    const payload = await response.json();
+    if (payload.status !== "ready") {
+      throw new ModelConnectionError(
+        "gateway",
+        t("model.notReady", "私有模型仍在启动，请稍后重试。")
+      );
+    }
+
+    modelConnection.username = username;
+    modelConnection.password = password;
+    modelConnection.connected = true;
+    modelConnection.status = "connected";
+    dom.modelPassword.value = "";
+    setModelConnectionStatus("connected", t("model.connected", "连接成功，真实模型推理已启用。"));
+    renderModelConnectionState();
+    showToast(t("model.connected", "连接成功，真实模型推理已启用。"));
+
+    const shouldResume = modelConnection.pendingAnalysis;
+    modelConnection.pendingAnalysis = false;
+    if (shouldResume) {
+      dom.modelConnectionDialog.close();
+      await analyzeCurrentFile();
+    }
+  } catch (error) {
+    modelConnection.username = "";
+    modelConnection.password = "";
+    modelConnection.connected = false;
+    modelConnection.status = "error";
+    dom.modelPassword.value = "";
+    setModelConnectionStatus(
+      "error",
+      error instanceof ModelConnectionError
+        ? error.message
+        : t("model.networkError", "无法连接私有模型网关，请确认演示服务正在运行。")
+    );
+    renderModelConnectionState();
+    dom.modelPassword.focus();
+  } finally {
+    submitButton.disabled = false;
+  }
+}
+
+function disconnectPrivateModel() {
+  modelConnection.username = "";
+  modelConnection.password = "";
+  modelConnection.connected = false;
+  modelConnection.pendingAnalysis = false;
+  modelConnection.status = "idle";
+  dom.modelPassword.value = "";
+  setModelConnectionStatus("idle", t("model.disconnected", "私有模型连接已断开。"));
+  renderModelConnectionState();
+  if (state.currentFile) {
+    renderAnalysisUnavailable(t("model.waiting", "等待连接私有模型后开始真实分析。"));
+  }
+}
+
+function setModelConnectionStatus(status, message) {
+  dom.modelConnectionStatus.dataset.state = status;
+  dom.modelConnectionStatus.textContent = message || "";
+}
+
+function renderModelConnectionState() {
+  if (!dom.modelConnectionButton) return;
+  const status = modelConnection.connected ? "connected" : modelConnection.status;
+  dom.modelConnectionButton.dataset.state = status;
+  dom.modelDisconnectButton.hidden = !modelConnection.connected;
+  const labelKey = modelConnection.connected
+    ? "model.connectedShort"
+    : status === "connecting"
+      ? "model.connectingShort"
+      : status === "error"
+        ? "model.retry"
+        : "model.connect";
+  const fallback = modelConnection.connected
+    ? "模型已连接"
+    : status === "connecting"
+      ? "正在连接"
+      : status === "error"
+        ? "重试连接"
+        : "连接模型";
+  dom.modelConnectionLabel.textContent = t(labelKey, fallback);
+
+  if (!usesRemoteModel()) return;
+  const engineIndicator = dom.engineLabel.previousElementSibling;
+  engineIndicator?.classList.remove("credible", "caution", "risk");
+  if (modelConnection.connected) {
+    engineIndicator?.classList.add("credible");
+    dom.engineLabel.textContent = t("engine.private", "私有模型服务已连接，仅返回产品级结论");
+  } else if (status === "error") {
+    engineIndicator?.classList.add("risk");
+    dom.engineLabel.textContent = t("engine.unavailable", "私有模型连接失败，未生成鉴真结论");
+  } else {
+    engineIndicator?.classList.add("caution");
+    dom.engineLabel.textContent = t("engine.awaiting", "等待私有模型授权，凭证不会写入仓库");
+  }
+}
+
+class ModelConnectionError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "ModelConnectionError";
+    this.code = code;
+  }
+}
+
 async function runSealingRitual() {
   dom.sealDialog.showModal();
   dom.sealTitle.textContent = t("seal.working", "正在生成证据包");
@@ -1423,9 +1760,13 @@ async function refreshLocalizedView() {
     renderDecision(state.activePayload);
     renderReviewer(state.activePayload);
   }
-  dom.engineLabel.textContent = state.activePayload?.backend && state.activePayload.backend !== "static-demo"
-    ? t("engine.private", "私有模型服务已连接，仅返回产品级结论")
-    : t("engine.demo", "产品演示模式，当前结果仅展示工作流");
+  if (usesRemoteModel()) {
+    renderModelConnectionState();
+  } else {
+    dom.engineLabel.textContent = state.activePayload?.backend && state.activePayload.backend !== "static-demo"
+      ? t("engine.private", "私有模型服务已连接，仅返回产品级结论")
+      : t("engine.demo", "产品演示模式，当前结果仅展示工作流");
+  }
 }
 
 function formatPercent(value) {

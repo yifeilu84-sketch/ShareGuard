@@ -1,6 +1,7 @@
 param(
     [switch]$AccessProtected,
-    [switch]$PasswordProtected
+    [switch]$PasswordProtected,
+    [string]$AllowedOrigin = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,9 +35,26 @@ $env:REMOTE_URL = "http://127.0.0.1:7861/api/analyze"
 $env:REMOTE_TOKEN = [string]$Secret.internal_api_token
 $env:PORT = "7860"
 $env:PYTHONUNBUFFERED = "1"
+Remove-Item Env:SHAREGUARD_ALLOWED_ORIGINS -ErrorAction SilentlyContinue
 Remove-Item Env:SHAREGUARD_API_TOKEN -ErrorAction SilentlyContinue
 Remove-Item Env:SHAREGUARD_HTTP_BASIC_USERNAME -ErrorAction SilentlyContinue
 Remove-Item Env:SHAREGUARD_HTTP_BASIC_PASSWORD -ErrorAction SilentlyContinue
+if ($AllowedOrigin) {
+    $NormalizedOrigin = $AllowedOrigin.Trim().TrimEnd("/")
+    $ParsedOrigin = $null
+    if (
+        -not [Uri]::TryCreate(
+            $NormalizedOrigin,
+            [UriKind]::Absolute,
+            [ref]$ParsedOrigin
+        ) -or
+        $ParsedOrigin.Scheme -ne "https" -or
+        $ParsedOrigin.AbsolutePath -ne "/"
+    ) {
+        throw "AllowedOrigin must be an HTTPS origin without a path."
+    }
+    $env:SHAREGUARD_ALLOWED_ORIGINS = $NormalizedOrigin
+}
 if ($PasswordProtected) {
     if (-not $Secret.demo_username -or -not $Secret.demo_password) {
         throw "Demo credentials are missing from the local secret file."

@@ -10,7 +10,8 @@
 
 ## 三种运行表面
 
-- `public_demo/` 与 GitHub Pages：仅包含安全静态案例，不连接模型。
+- `public_demo/`：只包含安全静态案例。
+- GitHub Pages 工作台：默认显示静态案例，输入临时演示凭证后可调用受保护的私有网关。
 - 私有 Web 工作台：与 API 同源，部署在访问网关之后。
 - 私有模型服务：常驻 GPU 进程，加载只读模型归档或私有签名制品。
 
@@ -61,6 +62,18 @@ Pilot 与 Production 均在解压前验证摘要，并从批准归档重新生�
 `POST /v1/analyze` 接受 `multipart/form-data` 的 `image` 字段，也接受带正确图片字节的原始请求体。仅支持单帧 JPEG、PNG 和 WebP。
 
 机器客户端通过 `Authorization: Bearer <token>` 调用。浏览器工作台不嵌入机器 Token，应由同源部署和外层访问网关保护。
+
+当前 GitHub Pages 演示使用 HTTPS Quick Tunnel 与 HTTP Basic 保护。公开的 `runtime-config.js` 只保存网关 URL 和允许的 Pages Origin；访问密码只保存在页面内存中，模型、内部 Token 与凭证文件由 `.gitignore` 排除。本机启动示例：
+
+```powershell
+.\scripts\local\start_protected_platform.ps1 `
+  -PasswordProtected `
+  -Offline `
+  -AllowedOrigin "https://yifeilu84-sketch.github.io"
+.\scripts\local\publish_quick_tunnel.ps1
+```
+
+Quick Tunnel 重建后需同步更新公开网关 URL。固定试点应使用命名 Tunnel 或固定域名，不应把 Quick Tunnel 当作长期基础设施。
 
 ## 运行约束
 

@@ -39,4 +39,7 @@ if ($State) {
     if ($State.quick_tunnel_url) {
         Write-Output "Demo URL: $($State.quick_tunnel_url)"
     }
+    if ($State.allowed_origin) {
+        Write-Output "Allowed browser origin: $($State.allowed_origin)"
+    }
 }

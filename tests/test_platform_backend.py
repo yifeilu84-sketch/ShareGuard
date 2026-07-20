@@ -368,6 +368,37 @@ class PlatformBackendTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("actions/deploy-pages", content)
         self.assertIn("shareguard/platform/static", content)
+        self.assertIn("enablement: true", content)
+
+    def test_github_pages_uses_memory_only_private_model_connection(self):
+        static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        script = (static / "dossier.js").read_text(encoding="utf-8")
+        runtime = (static / "runtime-config.js").read_text(encoding="utf-8")
+
+        self.assertIn('src="runtime-config.js"', html)
+        self.assertLess(
+            html.index('src="runtime-config.js"'),
+            html.index('src="dossier.js"'),
+        )
+        self.assertIn('id="modelConnectionDialog"', html)
+        self.assertIn('id="modelPassword"', html)
+        self.assertIn("credentialPersistence: \"memory-only\"", runtime)
+        self.assertIn("https://yifeilu84-sketch.github.io", runtime)
+        self.assertIn("function basicAuthorization", script)
+        self.assertIn('privateApiUrl("/v1/analyze")', script)
+        self.assertIn("credentials: \"omit\"", script)
+        self.assertNotIn(
+            'localStorage.setItem("shareguard-model',
+            script,
+        )
+        for forbidden in [
+            "internal_api_token",
+            "demo_password",
+            "alpha_clip_l",
+            "group_scores",
+        ]:
+            self.assertNotIn(forbidden, runtime)
 
     def test_deployment_docs_do_not_recommend_public_model_storage(self):
         root = Path(__file__).resolve().parents[1]

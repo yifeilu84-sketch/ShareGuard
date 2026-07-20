@@ -4,10 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; connect-src 'self' https://outline-indiana-presidential-moving.trycloudflare.com; base-uri 'none'; form-action 'self'">
   <meta name="description" content="ShareGuard面向媒体、品牌与内容平台的AI影像鉴真和发布风险决策平台。">
   <title>ShareGuard影像信任工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23151b1f'/%3E%3Cpath d='M16 16h32v32H16zM24 32h16' fill='none' stroke='%2355e7d8' stroke-width='5'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="dossier.css">
   <script src="i18n.js" defer></script>
+  <script src="runtime-config.js" defer></script>
   <script src="dossier.js" defer></script>
 </head>
 <body>
@@ -38,6 +42,10 @@
           <span class="state-block credible" aria-hidden="true"></span>
           <span id="engineLabel" data-i18n="engine.demo">产品演示模式，当前结果仅展示工作流</span>
         </div>
+        <button id="modelConnectionButton" class="model-connection-button" type="button" aria-haspopup="dialog" aria-controls="modelConnectionDialog">
+          <span class="model-connection-indicator" aria-hidden="true"></span>
+          <span id="modelConnectionLabel" data-i18n="model.connect">连接模型</span>
+        </button>
         <button id="languageToggle" class="language-toggle" type="button" aria-label="Switch to English" title="Switch to English">EN</button>
         <label class="command-button" for="imageInput" data-i18n="nav.import">导入影像</label>
         <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp">
@@ -298,6 +306,39 @@
         <button value="cancel" class="button secondary" data-i18n="release.cancel">取消</button>
         <button id="confirmReleaseButton" value="confirm" class="button primary" data-i18n="release.confirm">确认并记录</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="modelConnectionDialog" class="model-connection-dialog" aria-labelledby="modelConnectionTitle" aria-describedby="modelConnectionDescription">
+    <form id="modelConnectionForm" autocomplete="off">
+      <header>
+        <div>
+          <span>PRIVATE INFERENCE ACCESS</span>
+          <h2 id="modelConnectionTitle" data-i18n="model.title">连接 ShareGuard 私有模型</h2>
+        </div>
+        <button id="closeModelConnectionButton" class="dialog-icon-button" type="button" aria-label="关闭模型连接窗口" data-i18n-aria-label="model.closeAria">×</button>
+      </header>
+      <p id="modelConnectionDescription" data-i18n="model.description">输入演示凭证后，影像会通过加密连接发送到私有推理网关。模型权重与内部参数不会进入浏览器或公开仓库。</p>
+      <label for="modelEndpoint">
+        <span data-i18n="model.endpoint">私有网关</span>
+        <input id="modelEndpoint" type="url" readonly aria-readonly="true">
+      </label>
+      <div class="model-credential-grid">
+        <label for="modelUsername">
+          <span data-i18n="model.username">演示账号</span>
+          <input id="modelUsername" type="text" value="shareguard-demo" maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        </label>
+        <label for="modelPassword">
+          <span data-i18n="model.password">访问密码</span>
+          <input id="modelPassword" type="password" maxlength="160" autocomplete="new-password" required>
+        </label>
+      </div>
+      <p class="model-privacy-note" data-i18n="model.memoryOnly">凭证仅保存在当前页面内存中；刷新或关闭页面后自动清除。</p>
+      <p id="modelConnectionStatus" class="model-connection-status" role="status" aria-live="polite"></p>
+      <footer>
+        <button id="modelDisconnectButton" class="button secondary" type="button" data-i18n="model.disconnect" hidden>断开连接</button>
+        <button class="button primary" type="submit" data-i18n="model.submit">验证并连接</button>
+      </footer>
     </form>
   </dialog>
 
