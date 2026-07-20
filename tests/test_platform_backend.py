@@ -596,6 +596,7 @@ class PlatformBackendTests(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps({
                     "bundle_type": "noisyshare_fusion",
+                    "checkpoint_format": "safetensors",
                     "method": "clip_b_l_score_fusion",
                     "alpha_clip_l": 0.47,
                     "threshold": 0.72,
@@ -624,6 +625,7 @@ class PlatformBackendTests(unittest.TestCase):
             (bundle / "manifest.json").write_text(
                 json.dumps({
                     "bundle_type": "noisyshare_fusion",
+                    "checkpoint_format": "safetensors",
                     "method": "clip_b_l_score_fusion",
                     "alpha_clip_l": 0.47,
                     "threshold": 0.72,
@@ -684,6 +686,7 @@ class PlatformBackendTests(unittest.TestCase):
             (root / "manifest.json").write_text(
                 json.dumps({
                     "bundle_type": "noisyshare_fusion",
+                    "checkpoint_format": "safetensors",
                     "method": "clip_b_l_score_fusion",
                     "alpha_clip_l": 0.47,
                     "threshold": 0.72,
@@ -720,6 +723,7 @@ class PlatformBackendTests(unittest.TestCase):
             (root / "manifest.json").write_text(
                 json.dumps({
                     "bundle_type": "noisyshare_fusion",
+                    "checkpoint_format": "safetensors",
                     "method": "clip_b_l_score_fusion",
                     "alpha_clip_l": 0.47,
                     "threshold": 0.72,
@@ -762,6 +766,7 @@ class PlatformBackendTests(unittest.TestCase):
             (root / "manifest.json").write_text(
                 json.dumps({
                     "bundle_type": "noisyshare_fusion",
+                    "checkpoint_format": "safetensors",
                     "method": "clip_b_l_score_fusion",
                     "alpha_clip_l": 0.47,
                     "threshold": 0.72,

@@ -1,0 +1,9 @@
+tunnel: TUNNEL_UUID
+credentials-file: C:\Users\USERNAME\.cloudflared\TUNNEL_UUID.json
+
+ingress:
+  - hostname: demo.example.com
+    service: http://127.0.0.1:7860
+    originRequest:
+      connectTimeout: 10s
+  - service: http_status:404

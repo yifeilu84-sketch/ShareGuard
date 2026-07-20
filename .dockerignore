@@ -4,11 +4,14 @@ __pycache__
 .pytest_cache
 .mypy_cache
 .venv
+.venv-serving
 venv
 env
 
 data
 model_artifacts
+.shareguard-cache
+.shareguard-runtime
 output
 outputs
 paper

@@ -277,6 +277,8 @@ class RemoteDetectorBackend:
     def _result_from_payload(self, payload: Dict[str, Any], filename: str, image: Image.Image):
         if "probability_ai_generated" in payload:
             prob = clamp01(payload["probability_ai_generated"])
+        elif "ai_probability" in payload:
+            prob = clamp01(payload["ai_probability"])
         else:
             prob = clamp01(payload.get("probability", 0.0))
         confidence = clamp01(payload.get("confidence", abs(prob - 0.5) * 2.0))
@@ -285,7 +287,7 @@ class RemoteDetectorBackend:
             label = "ai_generated"
         remote_backend = payload.get("backend", "unknown")
         evidence = list(payload.get("evidence", []))
-        evidence.append(f"remote endpoint: {self.endpoint_url}")
+        evidence.append("Private inference service completed analysis.")
         return DetectionResult(
             file_name=payload.get("file_name", filename),
             label=label,

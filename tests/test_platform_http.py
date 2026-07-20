@@ -1,3 +1,4 @@
+import base64
 import http.client
 import io
 import json
@@ -70,6 +71,12 @@ class PlatformHttpTests(unittest.TestCase):
     def auth_headers(self, **extra):
         return {"Authorization": "Bearer test-token", **extra}
 
+    def basic_headers(self, username, password, **extra):
+        encoded = base64.b64encode(
+            f"{username}:{password}".encode("utf-8")
+        ).decode("ascii")
+        return {"Authorization": f"Basic {encoded}", **extra}
+
     def test_v1_health_does_not_require_auth_or_expose_backend(self):
         status, payload, _ = self.request("GET", "/v1/health")
 
@@ -95,6 +102,120 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertEqual(payload["error"]["code"], "unauthorized")
         self.assertTrue(payload["request_id"].startswith("sg_req_"))
+
+    def test_http_basic_gate_protects_static_page_health_and_analysis(self):
+        config = PlatformConfig(
+            http_basic_username="shareguard-demo",
+            http_basic_password="correct-horse-battery-staple",
+            max_upload_bytes=1024 * 1024,
+        )
+        server = self.start_server(MockDetectorBackend(), config)
+
+        page_status, page_payload, page_headers = self.request(
+            "GET",
+            "/",
+            server=server,
+        )
+        malformed_status, _, _ = self.request(
+            "GET",
+            "/v1/health",
+            headers={"Authorization": "Basic not-base64!"},
+            server=server,
+        )
+        health_status, _, _ = self.request(
+            "GET",
+            "/v1/health",
+            headers=self.basic_headers(
+                "shareguard-demo",
+                "correct-horse-battery-staple",
+            ),
+            server=server,
+        )
+        analyze_status, _, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers=self.basic_headers(
+                "shareguard-demo",
+                "correct-horse-battery-staple",
+                **{"Content-Type": "image/png"},
+            ),
+            server=server,
+        )
+
+        self.assertEqual(page_status, 401)
+        self.assertEqual(
+            page_payload["error"]["code"],
+            "authentication_required",
+        )
+        self.assertIn("Basic", page_headers["WWW-Authenticate"])
+        self.assertEqual(malformed_status, 401)
+        self.assertEqual(health_status, 200)
+        self.assertEqual(analyze_status, 200)
+
+    def test_access_identity_can_be_required(self):
+        config = PlatformConfig(
+            require_access_identity=True,
+            max_upload_bytes=1024 * 1024,
+        )
+        server = self.start_server(MockDetectorBackend(), config)
+
+        missing_status, missing_payload, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers={"Content-Type": "image/png"},
+            server=server,
+        )
+        allowed_status, _, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers={
+                "Content-Type": "image/png",
+                "Cf-Access-Authenticated-User-Email": "judge@example.com",
+            },
+            server=server,
+        )
+
+        self.assertEqual(missing_status, 401)
+        self.assertEqual(
+            missing_payload["error"]["code"],
+            "access_identity_required",
+        )
+        self.assertEqual(allowed_status, 200)
+
+    def test_per_identity_rate_limit_returns_retry_after(self):
+        config = PlatformConfig(
+            require_access_identity=True,
+            rate_limit_per_minute=1,
+            max_upload_bytes=1024 * 1024,
+        )
+        server = self.start_server(MockDetectorBackend(), config)
+        headers = {
+            "Content-Type": "image/png",
+            "Cf-Access-Authenticated-User-Email": "judge@example.com",
+        }
+
+        first_status, _, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers=headers,
+            server=server,
+        )
+        second_status, payload, response_headers = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers=headers,
+            server=server,
+        )
+
+        self.assertEqual(first_status, 200)
+        self.assertEqual(second_status, 429)
+        self.assertEqual(payload["error"]["code"], "rate_limited")
+        self.assertGreaterEqual(int(response_headers["Retry-After"]), 1)
 
     def test_v1_analyze_returns_sanitized_product_contract(self):
         status, payload, _ = self.request(

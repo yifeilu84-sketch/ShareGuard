@@ -45,6 +45,9 @@ outputs/figures/
 
 # Local model bundles and downloaded artifacts
 /model_artifacts/
+/.venv-serving/
+/.shareguard-cache/
+/.shareguard-runtime/
 
 # HPC
 *.out

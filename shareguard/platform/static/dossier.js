@@ -419,6 +419,9 @@ async function analyzeCurrentFile() {
     }
     const isDemoResponse = response.headers.get("X-ShareGuard-Demo") === "true";
     const payload = await response.json();
+    if (!Array.isArray(payload.propagation_views) || !payload.propagation_views.length) {
+      payload.propagation_views = await makeStaticPropagationViews(state.currentDataUrl);
+    }
     if (isDemoResponse || payload.backend === "mock") {
       // 后端为mock时切换到公开演示结果，避免把占位随机数呈现为产品结论。
       setAnalysisPayload(await buildStaticDemoPayload());

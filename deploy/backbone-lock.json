@@ -1,0 +1,29 @@
+{
+  "format": "shareguard-backbone-lock-v1",
+  "models": [
+    {
+      "name": "vit_base_patch14_dinov2.lvd142m",
+      "repository": "timm/vit_base_patch14_dinov2.lvd142m",
+      "revision": "4685c99dabffe5affac90bd99dbffd25801ae58d",
+      "filename": "model.safetensors",
+      "size": 346334872,
+      "sha256": "55cbb5d887b336d430e649c277b85a1429e724871f9d02ac16203235886d8c7b"
+    },
+    {
+      "name": "vit_base_patch16_clip_224.openai",
+      "repository": "timm/vit_base_patch16_clip_224.openai",
+      "revision": "977e3dd0ec55ab8da155f2fbeb6b5f54948b6e3d",
+      "filename": "pytorch_model.bin",
+      "size": 598594981,
+      "sha256": "53b401837e5baa82115d3b6db60c6fff43cfd1a6412e48ed0193d54a69d2f993"
+    },
+    {
+      "name": "vit_large_patch14_clip_224.openai",
+      "repository": "timm/vit_large_patch14_clip_224.openai",
+      "revision": "18d0535469bb561bf468d76c1d73aa35156c922b",
+      "filename": "pytorch_model.bin",
+      "size": 1710633285,
+      "sha256": "eb70c15b117effa76315db43fcbd9f32a655292fc861798343939a02f561c6ae"
+    }
+  ]
+}

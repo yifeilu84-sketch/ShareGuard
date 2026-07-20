@@ -115,6 +115,18 @@ class PlatformServiceTests(unittest.TestCase):
             "model_version": "private-manifest-version",
         })
 
+    def test_public_scores_are_rounded_and_previews_are_not_returned(self):
+        service = AnalysisService(
+            FakeBackend(probability=0.7349, confidence=0.6129),
+            PlatformConfig(public_score_decimals=2),
+        )
+
+        outcome = service.analyze(image_bytes(), "case.png", "sg_req_test")
+
+        self.assertEqual(outcome.public_payload["ai_probability"], 0.73)
+        self.assertEqual(outcome.public_payload["confidence"], 0.61)
+        self.assertEqual(outcome.public_payload["propagation_views"], [])
+
     def test_rejects_image_over_pixel_limit_before_inference(self):
         backend = FakeBackend()
         service = AnalysisService(backend, PlatformConfig(max_image_pixels=4))

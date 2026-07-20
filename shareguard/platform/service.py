@@ -20,11 +20,18 @@ DISCLAIMER = "本结果为技术辅助，不替代司法鉴定或最终法律结
 class AnalysisError(Exception):
     """An analysis failure safe to map to a public API error."""
 
-    def __init__(self, status: int, code: str, public_message: str):
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        public_message: str,
+        headers: Optional[Mapping[str, str]] = None,
+    ):
         super().__init__(public_message)
         self.status = int(status)
         self.code = code
         self.public_message = public_message
+        self.headers = dict(headers or {})
 
 
 @dataclass(frozen=True)
@@ -160,13 +167,19 @@ class AnalysisService:
         if isinstance(raw, Mapping) and raw.get("model_version"):
             model_version = str(raw["model_version"])
 
+        probability = round(
+            max(0.0, min(1.0, float(result.get("probability_ai_generated", 0.0)))),
+            self.config.public_score_decimals,
+        )
+        public_confidence = round(
+            max(0.0, min(1.0, float(result.get("confidence", 0.0)))),
+            self.config.public_score_decimals,
+        )
         safe_result = {
             "file_name": safe_name,
             "label": result.get("label", "real"),
-            "probability_ai_generated": float(
-                result.get("probability_ai_generated", 0.0)
-            ),
-            "confidence": float(result.get("confidence", 0.0)),
+            "probability_ai_generated": probability,
+            "confidence": public_confidence,
             "risk_level": result.get("risk_level", "uncertain"),
             "backend": PUBLIC_BACKEND_NAME,
             "image": {
@@ -181,7 +194,11 @@ class AnalysisService:
             ],
             "raw": {"model_version": model_version},
         }
-        propagation_views = make_propagation_views(image)
+        propagation_views = (
+            make_propagation_views(image)
+            if self.config.include_propagation_views
+            else []
+        )
         safe_result["propagation_views"] = propagation_views
         report = build_authenticity_report(safe_result)
         report["recommended_action"] = decision.recommended_action

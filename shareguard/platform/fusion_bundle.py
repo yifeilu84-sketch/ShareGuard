@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Optional
 from PIL import Image
 
 from .backends import DetectionResult, clamp01, image_info, label_from_probability, risk_from_probability
+from .safe_checkpoints import load_safe_checkpoint
 
 
 def load_bundle_manifest(bundle_dir: str | Path) -> Dict[str, Any]:
@@ -26,6 +27,8 @@ def load_bundle_manifest(bundle_dir: str | Path) -> Dict[str, Any]:
     for key in ["method", "alpha_clip_l", "threshold", "groups"]:
         if key not in manifest:
             raise ValueError(f"Missing manifest key: {key}")
+    if manifest.get("checkpoint_format") != "safetensors":
+        raise ValueError("Serving bundle must use safetensors checkpoints")
     return manifest
 
 
@@ -170,13 +173,21 @@ class FeatureFusionEnsemblePredictor:
         )
 
     def _load_seed_model(self, entry):
-        path = self.bundle_dir / entry["checkpoint"]
-        ckpt = self.torch.load(path, map_location=self.device)
-        mu = self.torch.as_tensor(ckpt["mu"], dtype=self.torch.float32, device=self.device)
-        sd = self.torch.as_tensor(ckpt["sd"], dtype=self.torch.float32, device=self.device)
+        root = self.bundle_dir.resolve()
+        path = (self.bundle_dir / entry["checkpoint"]).resolve()
+        if root not in path.parents:
+            raise ValueError("Checkpoint path escapes the model bundle")
+        tensors = load_safe_checkpoint(path, entry.get("checkpoint_sha256", ""))
+        mu = tensors["mu"].to(device=self.device, dtype=self.torch.float32)
+        sd = tensors["sd"].to(device=self.device, dtype=self.torch.float32)
         dim = int(mu.shape[-1])
         clf = self._mlp(dim).to(self.device)
-        clf.load_state_dict(ckpt["classifier"])
+        state = {
+            key[len("classifier."):]: value
+            for key, value in tensors.items()
+            if key.startswith("classifier.")
+        }
+        clf.load_state_dict(state, strict=True)
         clf.eval()
         return {"entry": entry, "classifier": clf, "mu": mu, "sd": sd}
 
