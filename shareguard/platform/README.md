@@ -69,7 +69,7 @@ Pilot 与 Production 均在解压前验证摘要，并从批准归档重新生�
 .\scripts\local\start_protected_platform.ps1 `
   -PasswordProtected `
   -Offline `
-  -AllowedOrigin "https://yifeilu84-sketch.github.io"
+  -AllowedOrigin "https://shareguard.systems"
 .\scripts\local\publish_quick_tunnel.ps1
 ```
 

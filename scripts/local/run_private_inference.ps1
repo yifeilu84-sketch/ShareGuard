@@ -8,7 +8,16 @@ $Python = Join-Path $Root ".venv-serving\Scripts\python.exe"
 $SecretFile = Join-Path $Root "secrets\local-serving.json"
 $Bundle = Join-Path $Root "model_artifacts\shareguard-noisyshare-fusion-v1-safe.tar.gz"
 $ChecksumFile = "$Bundle.sha256"
-$Cache = Join-Path $Root ".shareguard-cache"
+$DefaultCache = if ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "ShareGuard\cache"
+} else {
+    Join-Path $HOME ".shareguard-cache"
+}
+$Cache = if ($env:SHAREGUARD_LOCAL_CACHE) {
+    [IO.Path]::GetFullPath($env:SHAREGUARD_LOCAL_CACHE)
+} else {
+    $DefaultCache
+}
 
 if (-not (Test-Path -LiteralPath $Python)) {
     throw "Serving environment is missing. Run bootstrap_serving.ps1 first."

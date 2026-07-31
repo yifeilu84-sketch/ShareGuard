@@ -7,6 +7,9 @@ ShareGuard uses two loopback-only processes:
 
 The browser never receives the internal API token or model files. Model
 artifacts, cache files, logs, PID state, and local secrets are ignored by Git.
+On Windows, public backbone files default to the short
+`%LOCALAPPDATA%\ShareGuard\cache` path to avoid legacy `MAX_PATH` failures. Set
+`SHAREGUARD_LOCAL_CACHE` only when a different private cache location is needed.
 
 ## Bootstrap
 
@@ -63,5 +66,5 @@ as the session ends.
 .\scripts\local\stop_protected_platform.ps1
 ```
 
-Never publish port `7861`, the `secrets` directory, `.shareguard-cache`, or
-`model_artifacts`.
+Never publish port `7861`, the `secrets` directory, the configured local cache,
+or `model_artifacts`.

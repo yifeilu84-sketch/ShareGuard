@@ -39,7 +39,7 @@ python -m shareguard.platform.app
 .\scripts\local\start_protected_platform.ps1 `
   -PasswordProtected `
   -Offline `
-  -AllowedOrigin "https://yifeilu84-sketch.github.io"
+  -AllowedOrigin "https://shareguard.systems"
 
 .\scripts\local\publish_quick_tunnel.ps1
 ```

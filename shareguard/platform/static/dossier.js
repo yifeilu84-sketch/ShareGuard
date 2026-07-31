@@ -518,17 +518,21 @@ async function analyzeCurrentFile() {
 }
 
 function shouldUseStaticDemo() {
-  return window.location.protocol === "file:" || (isGithubPages() && !usesRemoteModel());
+  return window.location.protocol === "file:"
+    || ((isGithubPages() || isConfiguredRemotePage()) && !usesRemoteModel());
 }
 
 function isGithubPages() {
   return /\.github\.io$/i.test(window.location.hostname);
 }
 
-function usesRemoteModel() {
-  if (!isGithubPages() || !modelConnection.apiBaseUrl) return false;
+function isConfiguredRemotePage() {
   const allowedOrigin = normalizePageOrigin(runtimeConfig.allowedPageOrigin);
-  return !allowedOrigin || allowedOrigin === window.location.origin;
+  return Boolean(allowedOrigin) && allowedOrigin === window.location.origin;
+}
+
+function usesRemoteModel() {
+  return Boolean(modelConnection.apiBaseUrl) && isConfiguredRemotePage();
 }
 
 function normalizePageOrigin(value) {

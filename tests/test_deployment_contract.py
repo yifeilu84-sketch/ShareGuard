@@ -157,6 +157,15 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("docker compose", text)
         self.assertIn("shareguard.pilot.env.example", text)
 
+    def test_windows_serving_uses_short_local_cache_path(self):
+        text = (
+            ROOT / "scripts" / "local" / "run_private_inference.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("SHAREGUARD_LOCAL_CACHE", text)
+        self.assertIn("LOCALAPPDATA", text)
+        self.assertNotIn('$Cache = Join-Path $Root ".shareguard-cache"', text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 "use strict";
 
 window.ShareGuardRuntime = Object.freeze({
-  apiBaseUrl: "https://outline-indiana-presidential-moving.trycloudflare.com",
-  allowedPageOrigin: "https://yifeilu84-sketch.github.io",
+  apiBaseUrl: "https://api.shareguard.systems",
+  allowedPageOrigin: "https://shareguard.systems",
   credentialPersistence: "memory-only"
 });
