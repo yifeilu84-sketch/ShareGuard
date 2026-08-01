@@ -63,7 +63,7 @@ Pilot 与 Production 均在解压前验证摘要，并从批准归档重新生�
 
 机器客户端通过 `Authorization: Bearer <token>` 调用。浏览器工作台不嵌入机器 Token，应由同源部署和外层访问网关保护。
 
-当前 GitHub Pages 演示使用 HTTPS Quick Tunnel 与 HTTP Basic 保护。公开的 `runtime-config.js` 只保存网关 URL 和允许的 Pages Origin；访问密码只保存在页面内存中，模型、内部 Token 与凭证文件由 `.gitignore` 排除。本机启动示例：
+正式 GitHub Pages 工作台通过 Cloudflare Worker 访问 Modal 私有推理服务。公开的 `runtime-config.js` 只保存固定网关 URL 和允许的 Pages Origin；访问密码只保存在页面内存中，模型、内部 Token、Modal 源站与凭证文件由 `.gitignore` 排除。以下 Quick Tunnel 命令只用于本地临时联调：
 
 ```powershell
 .\scripts\local\start_protected_platform.ps1 `
@@ -88,7 +88,7 @@ Quick Tunnel 重建后需同步更新公开网关 URL。固定试点应使用命
 
 ## Modal Serverless
 
-正式演示可把同一私有融合模型部署到 Modal T4，并由 Cloudflare Worker 保持
+正式服务把同一私有融合模型部署到 Modal T4，并由 Cloudflare Worker 保持
 `api.shareguard.systems` 固定入口。模型仍不进入 GitHub；完整的制品校验、
 Secret、预览验证、域名切换、预热和回滚步骤见
 `deploy/MODAL_SERVERLESS.md`。
