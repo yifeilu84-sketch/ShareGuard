@@ -72,12 +72,14 @@ class PlatformConfigTests(unittest.TestCase):
             "SHAREGUARD_RATE_LIMIT_PER_MINUTE": "3",
             "SHAREGUARD_DAILY_QUOTA": "30",
             "SHAREGUARD_PUBLIC_SCORE_DECIMALS": "2",
+            "SHAREGUARD_EDGE_SHARED_SECRET": "edge-secret",
         })
 
         self.assertTrue(config.require_access_identity)
         self.assertEqual(config.rate_limit_per_minute, 3)
         self.assertEqual(config.daily_quota, 30)
         self.assertEqual(config.public_score_decimals, 2)
+        self.assertEqual(config.edge_shared_secret, "edge-secret")
 
     def test_invalid_numeric_limit_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "SHAREGUARD_MAX_UPLOAD_BYTES"):

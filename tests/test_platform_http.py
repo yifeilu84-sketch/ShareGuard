@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import http.client
 import io
 import json
@@ -18,6 +20,27 @@ def png_bytes(size=(16, 12)):
     buf = io.BytesIO()
     Image.new("RGB", size, color=(120, 80, 40)).save(buf, format="PNG")
     return buf.getvalue()
+
+
+def edge_headers(
+    secret="edge-secret",
+    client_id="b" * 64,
+    method="POST",
+    path="/v1/analyze",
+    timestamp=None,
+):
+    timestamp = int(time.time()) if timestamp is None else timestamp
+    canonical = f"{timestamp}\n{method}\n{path}\n{client_id}"
+    signature = hmac.new(
+        secret.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-ShareGuard-Client-Id": client_id,
+        "X-ShareGuard-Edge-Timestamp": str(timestamp),
+        "X-ShareGuard-Edge-Signature": signature,
+    }
 
 
 class FailingBackend:
@@ -216,6 +239,123 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertEqual(second_status, 429)
         self.assertEqual(payload["error"]["code"], "rate_limited")
         self.assertGreaterEqual(int(response_headers["Retry-After"]), 1)
+
+    def test_edge_identity_requires_shared_secret_and_opaque_client_id(self):
+        config = PlatformConfig(
+            edge_shared_secret="edge-secret",
+            max_upload_bytes=1024 * 1024,
+        )
+        server = self.start_server(MockDetectorBackend(), config)
+        base_headers = {"Content-Type": "image/png"}
+
+        missing_status, missing_payload, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers=base_headers,
+            server=server,
+        )
+        spoofed_status, spoofed_payload, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers={
+                **base_headers,
+                **edge_headers(secret="wrong-secret"),
+            },
+            server=server,
+        )
+        invalid_status, invalid_payload, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers={
+                **base_headers,
+                **edge_headers(client_id="not-a-digest"),
+            },
+            server=server,
+        )
+        allowed_status, _, _ = self.request(
+            "POST",
+            "/v1/analyze",
+            body=png_bytes(),
+            headers={
+                **base_headers,
+                **edge_headers(),
+            },
+            server=server,
+        )
+
+        self.assertEqual(missing_status, 401)
+        self.assertEqual(missing_payload["error"]["code"], "edge_identity_required")
+        self.assertEqual(spoofed_status, 401)
+        self.assertEqual(spoofed_payload["error"]["code"], "invalid_edge_identity")
+        self.assertEqual(invalid_status, 401)
+        self.assertEqual(invalid_payload["error"]["code"], "invalid_edge_identity")
+        self.assertEqual(allowed_status, 200)
+
+    def test_edge_identity_protects_readiness_endpoint(self):
+        config = PlatformConfig(
+            edge_shared_secret="edge-secret",
+            max_upload_bytes=1024 * 1024,
+        )
+        server = self.start_server(MockDetectorBackend(), config)
+
+        missing_status, missing_payload, _ = self.request(
+            "GET",
+            "/v1/ready",
+            server=server,
+        )
+        allowed_status, allowed_payload, _ = self.request(
+            "GET",
+            "/v1/ready",
+            headers=edge_headers(
+                client_id="c" * 64,
+                method="GET",
+                path="/v1/ready",
+            ),
+            server=server,
+        )
+
+        self.assertEqual(missing_status, 401)
+        self.assertEqual(
+            missing_payload["error"]["code"],
+            "edge_identity_required",
+        )
+        self.assertEqual(allowed_status, 200)
+        self.assertEqual(allowed_payload["status"], "ready")
+
+    def test_edge_identity_rejects_stale_or_path_mismatched_signatures(self):
+        config = PlatformConfig(
+            edge_shared_secret="edge-secret",
+            max_upload_bytes=1024 * 1024,
+        )
+        server = self.start_server(MockDetectorBackend(), config)
+
+        stale_status, stale_payload, _ = self.request(
+            "GET",
+            "/v1/ready",
+            headers=edge_headers(
+                method="GET",
+                path="/v1/ready",
+                timestamp=int(time.time()) - 600,
+            ),
+            server=server,
+        )
+        mismatched_status, mismatched_payload, _ = self.request(
+            "GET",
+            "/v1/ready",
+            headers=edge_headers(method="GET", path="/v1/health"),
+            server=server,
+        )
+
+        self.assertEqual(stale_status, 401)
+        self.assertEqual(stale_payload["error"]["code"], "invalid_edge_identity")
+        self.assertEqual(mismatched_status, 401)
+        self.assertEqual(
+            mismatched_payload["error"]["code"],
+            "invalid_edge_identity",
+        )
 
     def test_v1_analyze_returns_sanitized_product_contract(self):
         status, payload, _ = self.request(

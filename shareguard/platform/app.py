@@ -6,6 +6,7 @@ import binascii
 from email import policy
 from email.parser import BytesParser
 import hashlib
+import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import secrets
 from threading import BoundedSemaphore
+import time
 from typing import Mapping, Optional
 from uuid import uuid4
 
@@ -44,6 +46,10 @@ STATIC_ASSET_ROUTES = {
 }
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 ACCESS_IDENTITY_HEADER = "Cf-Access-Authenticated-User-Email"
+EDGE_CLIENT_ID_HEADER = "X-ShareGuard-Client-Id"
+EDGE_TIMESTAMP_HEADER = "X-ShareGuard-Edge-Timestamp"
+EDGE_SIGNATURE_HEADER = "X-ShareGuard-Edge-Signature"
+EDGE_SIGNATURE_MAX_AGE_SECONDS = 300
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "img-src 'self' data: blob:; "
@@ -177,29 +183,92 @@ def error_payload(request_id: str, code: str, message: str):
     }
 
 
-def request_actor(headers, client_address, require_access_identity: bool) -> str:
-    identity = str(headers.get(ACCESS_IDENTITY_HEADER, "")).strip().lower()
-    if identity:
-        invalid_identity = (
-            len(identity) > 254
-            or "@" not in identity
-            or any(ch.isspace() for ch in identity)
-        )
-        if invalid_identity:
+def request_actor(
+    headers,
+    client_address,
+    require_access_identity: bool,
+    edge_shared_secret: Optional[str] = None,
+    request_method: str = "",
+    request_path: str = "",
+) -> str:
+    if edge_shared_secret:
+        client_id = str(headers.get(EDGE_CLIENT_ID_HEADER, "")).strip().lower()
+        timestamp_text = str(headers.get(EDGE_TIMESTAMP_HEADER, "")).strip()
+        signature = str(headers.get(EDGE_SIGNATURE_HEADER, "")).strip().lower()
+        if not client_id or not timestamp_text or not signature:
             raise AnalysisError(
                 401,
-                "invalid_access_identity",
-                "Access identity is invalid.",
+                "edge_identity_required",
+                "A trusted edge identity is required.",
             )
-        source = f"access:{identity}"
-    elif require_access_identity:
-        raise AnalysisError(
-            401,
-            "access_identity_required",
-            "Please authenticate before using the private analysis service.",
-        )
+        if (
+            len(client_id) != 64
+            or any(ch not in "0123456789abcdef" for ch in client_id)
+        ):
+            raise AnalysisError(
+                401,
+                "invalid_edge_identity",
+                "Edge client identity is invalid.",
+            )
+        if (
+            not timestamp_text.isdigit()
+            or len(timestamp_text) > 12
+            or len(signature) != 64
+            or any(ch not in "0123456789abcdef" for ch in signature)
+        ):
+            raise AnalysisError(
+                401,
+                "invalid_edge_identity",
+                "Edge client identity is invalid.",
+            )
+        timestamp = int(timestamp_text)
+        if abs(int(time.time()) - timestamp) > EDGE_SIGNATURE_MAX_AGE_SECONDS:
+            raise AnalysisError(
+                401,
+                "invalid_edge_identity",
+                "Edge client identity is invalid.",
+            )
+        canonical = "\n".join([
+            timestamp_text,
+            request_method.upper(),
+            request_path,
+            client_id,
+        ])
+        expected_signature = hmac.new(
+            edge_shared_secret.encode("utf-8"),
+            canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not secrets.compare_digest(signature, expected_signature):
+            raise AnalysisError(
+                401,
+                "invalid_edge_identity",
+                "Edge client identity is invalid.",
+            )
+        source = f"edge:{client_id}"
     else:
-        source = f"client:{client_address[0]}"
+        identity = str(headers.get(ACCESS_IDENTITY_HEADER, "")).strip().lower()
+        if identity:
+            invalid_identity = (
+                len(identity) > 254
+                or "@" not in identity
+                or any(ch.isspace() for ch in identity)
+            )
+            if invalid_identity:
+                raise AnalysisError(
+                    401,
+                    "invalid_access_identity",
+                    "Access identity is invalid.",
+                )
+            source = f"access:{identity}"
+        elif require_access_identity:
+            raise AnalysisError(
+                401,
+                "access_identity_required",
+                "Please authenticate before using the private analysis service.",
+            )
+        else:
+            source = f"client:{client_address[0]}"
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
@@ -290,6 +359,28 @@ def make_handler(
             )
             return False
 
+        def require_trusted_edge(self) -> bool:
+            if not runtime_config.edge_shared_secret:
+                return True
+            request_id = self.new_request_id()
+            try:
+                request_actor(
+                    self.headers,
+                    self.client_address,
+                    False,
+                    runtime_config.edge_shared_secret,
+                    self.command,
+                    self.path.split("?", 1)[0],
+                )
+            except AnalysisError as exc:
+                self.send_json(
+                    error_payload(request_id, exc.code, exc.public_message),
+                    status=exc.status,
+                    extra_headers=exc.headers,
+                )
+                return False
+            return True
+
         def do_OPTIONS(self):
             request_id = self.new_request_id()
             request_path = self.path.split("?", 1)[0]
@@ -367,6 +458,8 @@ def make_handler(
 
         def do_GET(self):
             if not self.require_http_basic_auth():
+                return
+            if not self.require_trusted_edge():
                 return
             request_path = self.path.split("?", 1)[0]
             if request_path in {"/", "/index.html"}:
@@ -457,6 +550,9 @@ def make_handler(
                     self.headers,
                     self.client_address,
                     runtime_config.require_access_identity,
+                    runtime_config.edge_shared_secret,
+                    self.command,
+                    self.path.split("?", 1)[0],
                 )
                 limit = rate_limiter.consume(actor)
                 if not limit.allowed:

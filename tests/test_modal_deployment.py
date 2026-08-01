@@ -56,6 +56,10 @@ class ModalDeploymentTests(unittest.TestCase):
         ]:
             self.assertNotIn(setting, image_environment)
         self.assertIn("env=runtime_environment()", text)
+        self.assertIn('environment.get("SHAREGUARD_EDGE_SHARED_SECRET")', text)
+        self.assertIn("Modal edge identity secret is missing", text)
+        self.assertIn('"SHAREGUARD_RATE_LIMIT_PER_MINUTE": "0"', text)
+        self.assertIn('"SHAREGUARD_DAILY_QUOTA": "0"', text)
 
     def test_modal_adapter_forces_production_fusion_bundle(self):
         text = self.modal_source()

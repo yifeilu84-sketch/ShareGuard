@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -177,22 +178,46 @@ class DeploymentContractTests(unittest.TestCase):
             ROOT / "deploy" / "cloudflare-worker" / "wrangler.preview.toml"
         ).read_text(encoding="utf-8")
 
-        for marker in ["cf-access-", "Cache-Control", "no-store", "MODAL_ORIGIN"]:
+        for marker in [
+            "cf-access-",
+            "Cache-Control",
+            "no-store",
+            "MODAL_ORIGIN",
+            "EDGE_SHARED_SECRET",
+            "EDGE_AUTH_HMAC",
+            "X-ShareGuard-Client-Id",
+            "X-ShareGuard-Edge-Timestamp",
+            "X-ShareGuard-Edge-Signature",
+            "crypto.subtle",
+            "RATE_LIMITER",
+        ]:
             self.assertIn(marker, source)
         forbidden_host_suffix = ".".join(("modal", "run"))
         self.assertNotIn(forbidden_host_suffix, source)
-        self.assertNotIn("Basic ", source)
+        self.assertIsNone(
+            re.search(r"Basic [A-Za-z0-9+/]{12,}={0,2}", source)
+        )
         self.assertNotIn("MODAL_ORIGIN", config)
+        self.assertNotIn("EDGE_AUTH_HMAC", config)
         self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', config)
         self.assertIn("workers_dev = false", config)
         self.assertIn("preview_urls = false", config)
         self.assertIn('pattern = "api.shareguard.systems/*"', config)
         self.assertIn('zone_name = "shareguard.systems"', config)
+        self.assertIn('name = "RATE_LIMITER"', config)
+        self.assertIn('class_name = "ShareGuardRateLimiter"', config)
+        self.assertIn('new_sqlite_classes = ["ShareGuardRateLimiter"]', config)
+        self.assertIn('EDGE_RATE_LIMIT_PER_MINUTE = "3"', config)
+        self.assertIn('EDGE_DAILY_QUOTA = "50"', config)
         self.assertIn('name = "shareguard-api-gateway-preview"', preview_config)
         self.assertIn("workers_dev = true", preview_config)
         self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', preview_config)
+        self.assertIn('name = "RATE_LIMITER"', preview_config)
+        self.assertIn('class_name = "ShareGuardRateLimiter"', preview_config)
         self.assertNotIn("api.shareguard.systems", preview_config)
         self.assertNotIn("MODAL_ORIGIN", preview_config)
+        self.assertNotIn("EDGE_SHARED_SECRET", preview_config)
+        self.assertNotIn("EDGE_AUTH_HMAC", preview_config)
 
 
 if __name__ == "__main__":

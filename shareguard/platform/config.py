@@ -62,6 +62,7 @@ class PlatformConfig:
     rate_limit_per_minute: int = 0
     daily_quota: int = 0
     require_access_identity: bool = False
+    edge_shared_secret: Optional[str] = None
     http_basic_username: Optional[str] = None
     http_basic_password: Optional[str] = None
 
@@ -132,6 +133,7 @@ class PlatformConfig:
                 "SHAREGUARD_REQUIRE_ACCESS_IDENTITY",
                 False,
             ),
+            edge_shared_secret=env.get("SHAREGUARD_EDGE_SHARED_SECRET") or None,
             http_basic_username=env.get("SHAREGUARD_HTTP_BASIC_USERNAME") or None,
             http_basic_password=env.get("SHAREGUARD_HTTP_BASIC_PASSWORD") or None,
         )

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -100,11 +102,33 @@ def _assert_public_response(value: Any, path: str = "response") -> None:
             _assert_public_response(child, f"{path}[{index}]")
 
 
+def _edge_headers(edge_secret: str, method: str, path: str) -> dict[str, str]:
+    client_id = hmac.new(
+        edge_secret.encode("utf-8"),
+        b"shareguard-cloud-verifier",
+        hashlib.sha256,
+    ).hexdigest()
+    timestamp = str(int(time()))
+    canonical = "\n".join([timestamp, method.upper(), path, client_id])
+    signature = hmac.new(
+        edge_secret.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-ShareGuard-Client-Id": client_id,
+        "X-ShareGuard-Edge-Timestamp": timestamp,
+        "X-ShareGuard-Edge-Signature": signature,
+    }
+
+
 def verify_endpoint(
     base_url: str,
     username: str,
     password: str,
     image_path: Path,
+    *,
+    edge_secret: str | None = None,
 ) -> VerificationResult:
     """Verify authentication, readiness, inference, and response privacy."""
 
@@ -119,15 +143,21 @@ def verify_endpoint(
         "Origin": PUBLIC_ORIGIN,
         "User-Agent": "ShareGuard-Cloud-Verifier/1.0",
     }
+    ready_edge_headers = (
+        _edge_headers(edge_secret, "GET", "/v1/ready")
+        if edge_secret
+        else {}
+    )
     unauthenticated = Request(
         f"{base_url}/v1/ready",
-        headers=common_headers,
+        headers={**common_headers, **ready_edge_headers},
         method="GET",
     )
     _request_json(unauthenticated, expected_status=401)
 
     authenticated_headers = {
         **common_headers,
+        **ready_edge_headers,
         "Authorization": _basic_authorization(username, password),
     }
     ready_payload, ready_latency_ms = _request_json(
@@ -150,6 +180,11 @@ def verify_endpoint(
             data=image_bytes,
             headers={
                 **authenticated_headers,
+                **(
+                    _edge_headers(edge_secret, "POST", "/v1/analyze")
+                    if edge_secret
+                    else {}
+                ),
                 "Content-Type": content_type,
                 "X-File-Name": image_path.name,
             },
@@ -180,6 +215,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--image", required=True, type=Path)
+    parser.add_argument(
+        "--direct-origin",
+        action="store_true",
+        help="add the private edge identity required by the direct Modal origin",
+    )
     return parser
 
 
@@ -192,7 +232,20 @@ def main() -> int:
             "SHAREGUARD_HTTP_BASIC_USERNAME and "
             "SHAREGUARD_HTTP_BASIC_PASSWORD must be set"
         )
-    result = verify_endpoint(args.base_url, username, password, args.image)
+    edge_secret = ""
+    if args.direct_origin:
+        edge_secret = os.environ.get("SHAREGUARD_EDGE_SHARED_SECRET", "")
+        if not edge_secret:
+            raise SystemExit(
+                "SHAREGUARD_EDGE_SHARED_SECRET must be set for --direct-origin"
+            )
+    result = verify_endpoint(
+        args.base_url,
+        username,
+        password,
+        args.image,
+        edge_secret=edge_secret or None,
+    )
     print(json.dumps(asdict(result), ensure_ascii=True, sort_keys=True))
     return 0
 

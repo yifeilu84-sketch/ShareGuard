@@ -1,4 +1,6 @@
 import contextlib
+import hashlib
+import hmac
 import io
 import json
 import tempfile
@@ -23,10 +25,15 @@ class VerificationHandler(BaseHTTPRequestHandler):
 
     def record(self, body=b""):
         self.__class__.records.append({
+            "method": self.command,
             "path": self.path,
             "authorization": self.headers.get("Authorization"),
             "origin": self.headers.get("Origin"),
             "user_agent": self.headers.get("User-Agent"),
+            "edge_secret": self.headers.get("X-ShareGuard-Edge-Secret"),
+            "edge_timestamp": self.headers.get("X-ShareGuard-Edge-Timestamp"),
+            "edge_signature": self.headers.get("X-ShareGuard-Edge-Signature"),
+            "client_id": self.headers.get("X-ShareGuard-Client-Id"),
             "filename": self.headers.get("X-File-Name"),
             "body": body,
         })
@@ -135,6 +142,32 @@ class ModalCloudVerifierTests(unittest.TestCase):
                 self.image_path,
             )
 
+    def test_direct_origin_verification_adds_signed_edge_identity(self):
+        verify_endpoint(
+            self.base_url,
+            "verifier",
+            "correct-horse-battery-staple",
+            self.image_path,
+            edge_secret="private-edge-secret",
+        )
+
+        for record in VerificationHandler.records:
+            self.assertIsNone(record["edge_secret"])
+            self.assertRegex(record["client_id"], r"^[0-9a-f]{64}$")
+            self.assertRegex(record["edge_timestamp"], r"^\d{10}$")
+            canonical = "\n".join([
+                record["edge_timestamp"],
+                record["method"],
+                record["path"],
+                record["client_id"],
+            ])
+            expected = hmac.new(
+                b"private-edge-secret",
+                canonical.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            self.assertEqual(record["edge_signature"], expected)
+
     def test_runbook_covers_secure_cutover_warmup_and_rollback(self):
         text = (ROOT / "deploy" / "MODAL_SERVERLESS.md").read_text(
             encoding="utf-8"
@@ -150,6 +183,9 @@ class ModalCloudVerifierTests(unittest.TestCase):
             "9f48b64d4a90a0ae815711f2769216e16fac990e45114d3ed5256e536aeb5d82",
             "modal deploy deploy/modal/shareguard_modal.py",
             "wrangler secret put MODAL_ORIGIN",
+            "SHAREGUARD_EDGE_SHARED_SECRET",
+            "modal app history",
+            "modal app rollback",
             "verify_cloud_endpoint.py",
             "api.shareguard.systems",
             "update_autoscaler(min_containers=1)",

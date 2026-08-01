@@ -44,16 +44,35 @@ py -3.11 -m venv .venv-modal
 
 ## 3. 创建运行 Secret
 
-新建被 `.gitignore` 排除的 `deploy/modal/.env`，只写入以下三项：
+新建被 `.gitignore` 排除的 `deploy/modal/.env`，只写入以下四项：
 
 ```dotenv
 SHAREGUARD_BUNDLE_SHA256=9f48b64d4a90a0ae815711f2769216e16fac990e45114d3ed5256e536aeb5d82
 SHAREGUARD_HTTP_BASIC_USERNAME=
 SHAREGUARD_HTTP_BASIC_PASSWORD=
+SHAREGUARD_EDGE_SHARED_SECRET=
 ```
 
 不要同时设置 `SHAREGUARD_API_TOKEN`，因为它与 HTTP Basic 共用
 `Authorization` 请求头。请在本机填入现有演示用户名与至少 20 位的私有密码，
+并为边缘身份生成独立的 256 位随机密钥。以下命令只把密钥写入被忽略的文件，
+不会在终端显示密钥：
+
+```powershell
+$EnvFile = "deploy/modal/.env"
+$Random = [Security.Cryptography.RandomNumberGenerator]::Create()
+$Bytes = New-Object byte[] 32
+$Random.GetBytes($Bytes)
+$Random.Dispose()
+$EdgeSecret = -join ($Bytes | ForEach-Object { $_.ToString("x2") })
+$Content = Get-Content -Raw $EnvFile
+$Content.Replace(
+  "SHAREGUARD_EDGE_SHARED_SECRET=",
+  "SHAREGUARD_EDGE_SHARED_SECRET=$EdgeSecret"
+) | Set-Content -Encoding utf8 $EnvFile
+Remove-Variable EdgeSecret, Bytes, Content
+```
+
 再将文件装入 Modal Secret：
 
 ```powershell
@@ -114,6 +133,7 @@ Get-Content deploy/modal/.env | Where-Object {
 ```powershell
 .\.venv-modal\Scripts\python.exe scripts/modal/verify_cloud_endpoint.py `
   --base-url $env:MODAL_ORIGIN `
+  --direct-origin `
   --image shareguard/platform/static/assets/flagship-event.jpg
 ```
 
@@ -128,6 +148,28 @@ npm test --prefix deploy/cloudflare-worker
 Push-Location deploy/cloudflare-worker
 npx wrangler login
 npx wrangler secret put MODAL_ORIGIN --config wrangler.preview.toml
+$Settings = @{}
+Get-Content ..\modal\.env | Where-Object {
+  $_ -match '^[A-Za-z_][A-Za-z0-9_]*='
+} | ForEach-Object {
+  $Name, $Value = $_ -split '=', 2
+  $Settings[$Name] = $Value
+}
+$EdgeSecret = $Settings["SHAREGUARD_EDGE_SHARED_SECRET"]
+$Pair = "$($Settings['SHAREGUARD_HTTP_BASIC_USERNAME']):$($Settings['SHAREGUARD_HTTP_BASIC_PASSWORD'])"
+$Authorization = "Basic " + [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($Pair)
+)
+$Hmac = [Security.Cryptography.HMACSHA256]::new(
+  [Text.Encoding]::UTF8.GetBytes($EdgeSecret)
+)
+$AuthHmac = -join ($Hmac.ComputeHash(
+  [Text.Encoding]::UTF8.GetBytes($Authorization)
+) | ForEach-Object { $_.ToString("x2") })
+$Hmac.Dispose()
+$EdgeSecret | npx wrangler secret put EDGE_SHARED_SECRET --config wrangler.preview.toml
+$AuthHmac | npx wrangler secret put EDGE_AUTH_HMAC --config wrangler.preview.toml
+Remove-Variable Settings, EdgeSecret, Pair, Authorization, Hmac, AuthHmac
 npx wrangler deploy --config wrangler.preview.toml
 Pop-Location
 ```
@@ -140,6 +182,12 @@ Cloudflare 账户首次发布 Worker 时可能要求注册免费的 `workers.dev
 在 Dashboard 打开 **Workers & Pages** 完成一次初始化后重新部署即可；该步骤不
 购买套餐，也不会修改 `shareguard.systems` 的 DNS。预览使用独立的
 `shareguard-api-gateway-preview` Worker，不会提前接管正式 API 域名。
+
+Worker 先用 `EDGE_AUTH_HMAC` 在边缘拒绝错误 Basic 凭据，错误凭据不会消耗分析额度。
+随后把 Cloudflare 提供的客户端地址用 HMAC 转换为不可逆标识，原始地址不会转发到
+Modal。每次转发使用时间戳、方法、路径和客户端标识生成短时 HMAC 签名，共享密钥
+本身不进入请求头。`ShareGuardRateLimiter` Durable Object 使用 SQLite 为每个标识精确
+保存分钟和每日额度；如果边缘密钥、绑定或存储不可用，分析请求会关闭式失败。
 
 ```powershell
 $env:WORKER_ORIGIN = Read-Host "Worker HTTPS origin"
@@ -204,6 +252,28 @@ Route 会在到达 Tunnel 前接管请求，因此既不需要公开 Modal origi
 ```powershell
 Push-Location deploy/cloudflare-worker
 npx wrangler secret put MODAL_ORIGIN
+$Settings = @{}
+Get-Content ..\modal\.env | Where-Object {
+  $_ -match '^[A-Za-z_][A-Za-z0-9_]*='
+} | ForEach-Object {
+  $Name, $Value = $_ -split '=', 2
+  $Settings[$Name] = $Value
+}
+$EdgeSecret = $Settings["SHAREGUARD_EDGE_SHARED_SECRET"]
+$Pair = "$($Settings['SHAREGUARD_HTTP_BASIC_USERNAME']):$($Settings['SHAREGUARD_HTTP_BASIC_PASSWORD'])"
+$Authorization = "Basic " + [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($Pair)
+)
+$Hmac = [Security.Cryptography.HMACSHA256]::new(
+  [Text.Encoding]::UTF8.GetBytes($EdgeSecret)
+)
+$AuthHmac = -join ($Hmac.ComputeHash(
+  [Text.Encoding]::UTF8.GetBytes($Authorization)
+) | ForEach-Object { $_.ToString("x2") })
+$Hmac.Dispose()
+$EdgeSecret | npx wrangler secret put EDGE_SHARED_SECRET
+$AuthHmac | npx wrangler secret put EDGE_AUTH_HMAC
+Remove-Variable Settings, EdgeSecret, Pair, Authorization, Hmac, AuthHmac
 npx wrangler deploy
 Pop-Location
 
@@ -260,6 +330,36 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 若切换前使用的是 HTTP Basic 模式，必须沿用已记录的 Basic 启动参数和同一凭据，
 不要在事故处理中临时更换浏览器认证方式。
 
+### 回滚 Modal 部署版本
+
+先查看版本历史并记录目标版本，不要删除 Volume 或 Secret：
+
+```powershell
+.\.venv-modal\Scripts\python.exe -m modal app history shareguard-private-inference
+```
+
+Team/Enterprise 账户可直接回滚到已确认的版本：
+
+```powershell
+.\.venv-modal\Scripts\python.exe -m modal app rollback `
+  shareguard-private-inference <version>
+```
+
+Free 账户没有服务端版本回滚时，从已确认的 Git 提交建立临时 worktree 并重新部署，
+避免改写当前工作区；部署后必须重新运行直连和固定域名验证器：
+
+```powershell
+$RollbackTree = Join-Path $env:TEMP "shareguard-modal-rollback"
+$ModalPython = (Resolve-Path ".\.venv-modal\Scripts\python.exe").Path
+git worktree add $RollbackTree <known-good-commit>
+Push-Location $RollbackTree
+& $ModalPython -m modal deploy `
+  --tag known-good deploy/modal/shareguard_modal.py
+Pop-Location
+git worktree remove $RollbackTree
+Remove-Variable ModalPython, RollbackTree
+```
+
 ## 11. 收尾
 
 ```powershell
@@ -267,6 +367,7 @@ Remove-Item Env:MODAL_ORIGIN -ErrorAction SilentlyContinue
 Remove-Item Env:WORKER_ORIGIN -ErrorAction SilentlyContinue
 Remove-Item Env:SHAREGUARD_HTTP_BASIC_USERNAME -ErrorAction SilentlyContinue
 Remove-Item Env:SHAREGUARD_HTTP_BASIC_PASSWORD -ErrorAction SilentlyContinue
+Remove-Item Env:SHAREGUARD_EDGE_SHARED_SECRET -ErrorAction SilentlyContinue
 
 git status --short
 git ls-files | rg "(model_artifacts|\.safetensors$|\.tar\.gz$|\.env$)"

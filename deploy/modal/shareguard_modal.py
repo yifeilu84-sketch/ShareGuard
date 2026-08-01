@@ -47,8 +47,8 @@ IMAGE = (
             "SHAREGUARD_DEVICE": "cuda",
             "SHAREGUARD_MODEL_VERSION": "shareguard-private-v1",
             "SHAREGUARD_ALLOWED_ORIGINS": "https://shareguard.systems",
-            "SHAREGUARD_RATE_LIMIT_PER_MINUTE": "3",
-            "SHAREGUARD_DAILY_QUOTA": "30",
+            "SHAREGUARD_RATE_LIMIT_PER_MINUTE": "0",
+            "SHAREGUARD_DAILY_QUOTA": "0",
             "SHAREGUARD_PUBLIC_SCORE_DECIMALS": "2",
             "SHAREGUARD_INCLUDE_PROPAGATION_VIEWS": "false",
             "SHAREGUARD_MAX_UPLOAD_BYTES": "10485760",
@@ -68,6 +68,8 @@ app = modal.App("shareguard-private-inference")
 
 def runtime_environment():
     environment = os.environ.copy()
+    if not environment.get("SHAREGUARD_EDGE_SHARED_SECRET"):
+        raise RuntimeError("Modal edge identity secret is missing")
     environment.update(
         {
             "SHAREGUARD_MODEL_CACHE": f"{CACHE_ROOT}/models",
