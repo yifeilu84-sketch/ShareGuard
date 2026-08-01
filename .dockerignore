@@ -27,6 +27,8 @@ credentials
 .env
 .env.*
 *.env
+deploy/modal/.env
+deploy/modal/*.json
 *.key
 *.pem
 

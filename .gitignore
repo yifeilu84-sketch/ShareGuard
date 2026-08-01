@@ -48,6 +48,8 @@ outputs/figures/
 /.venv-serving/
 /.shareguard-cache/
 /.shareguard-runtime/
+deploy/modal/.env
+deploy/modal/*.json
 
 # HPC
 *.out
