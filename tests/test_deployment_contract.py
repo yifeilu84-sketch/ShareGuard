@@ -176,7 +176,8 @@ class DeploymentContractTests(unittest.TestCase):
 
         for marker in ["cf-access-", "Cache-Control", "no-store", "MODAL_ORIGIN"]:
             self.assertIn(marker, source)
-        self.assertNotIn(".modal.run", source)
+        forbidden_host_suffix = ".".join(("modal", "run"))
+        self.assertNotIn(forbidden_host_suffix, source)
         self.assertNotIn("Basic ", source)
         self.assertNotIn("MODAL_ORIGIN", config)
         self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', config)

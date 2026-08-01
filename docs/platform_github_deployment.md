@@ -124,3 +124,10 @@ git ls-files | rg "(model_artifacts|\.pt$|\.pth$|\.ckpt$|\.safetensors$|\.tar\.g
 ```
 
 最后一条命令不应列出任何真实模型或秘密文件。文档中的文字引用不等于制品被跟踪，应结合完整路径复核。
+
+## Modal Serverless 生产入口
+
+需要摆脱本机常驻推理时，使用 `deploy/modal/shareguard_modal.py` 在私有 Modal
+Volume 上运行真实模型，并通过流式 Cloudflare Worker 接入固定 API 域名。
+逐步上线、真实图片验收、比赛前预热、scale-to-zero 与 Named Tunnel 回滚命令
+统一维护在 `deploy/MODAL_SERVERLESS.md`。

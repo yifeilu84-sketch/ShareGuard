@@ -46,6 +46,8 @@ outputs/figures/
 # Local model bundles and downloaded artifacts
 /model_artifacts/
 /.venv-serving/
+/.venv-modal/
+node_modules/
 /.shareguard-cache/
 /.shareguard-runtime/
 deploy/modal/.env

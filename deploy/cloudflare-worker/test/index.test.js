@@ -6,7 +6,7 @@ import { handleRequest } from "../src/index.js";
 
 const env = {
   ALLOWED_ORIGIN: "https://shareguard.systems",
-  MODAL_ORIGIN: "https://private-example.modal.run",
+  MODAL_ORIGIN: "https://private-upstream.example",
 };
 
 

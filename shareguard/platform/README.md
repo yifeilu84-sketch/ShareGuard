@@ -85,3 +85,10 @@ Quick Tunnel 重建后需同步更新公开网关 URL。固定试点应使用命
 - 响应不包含模型路径、内部阈值、融合权重、逐模型分数或后端原始字典。
 
 完整容器与环境变量说明见 `docs/platform_github_deployment.md`。
+
+## Modal Serverless
+
+正式演示可把同一私有融合模型部署到 Modal T4，并由 Cloudflare Worker 保持
+`api.shareguard.systems` 固定入口。模型仍不进入 GitHub；完整的制品校验、
+Secret、预览验证、域名切换、预热和回滚步骤见
+`deploy/MODAL_SERVERLESS.md`。
