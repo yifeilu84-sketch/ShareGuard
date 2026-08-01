@@ -166,6 +166,21 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("LOCALAPPDATA", text)
         self.assertNotIn('$Cache = Join-Path $Root ".shareguard-cache"', text)
 
+    def test_cloudflare_worker_keeps_runtime_secrets_out_of_source(self):
+        source = (
+            ROOT / "deploy" / "cloudflare-worker" / "src" / "index.js"
+        ).read_text(encoding="utf-8")
+        config = (
+            ROOT / "deploy" / "cloudflare-worker" / "wrangler.toml"
+        ).read_text(encoding="utf-8")
+
+        for marker in ["cf-access-", "Cache-Control", "no-store", "MODAL_ORIGIN"]:
+            self.assertIn(marker, source)
+        self.assertNotIn(".modal.run", source)
+        self.assertNotIn("Basic ", source)
+        self.assertNotIn("MODAL_ORIGIN", config)
+        self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', config)
+
 
 if __name__ == "__main__":
     unittest.main()

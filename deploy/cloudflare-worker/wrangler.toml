@@ -1,0 +1,7 @@
+name = "shareguard-api-gateway"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGIN = "https://shareguard.systems"
