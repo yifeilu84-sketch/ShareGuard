@@ -15,6 +15,7 @@ from .product import build_authenticity_report, make_propagation_views
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
 PUBLIC_BACKEND_NAME = "private-model-api"
 DISCLAIMER = "本结果为技术辅助，不替代司法鉴定或最终法律结论。"
+SCORE_NOTICE = "模型分数未经概率校准，不代表图像为AI生成的事实概率。"
 
 
 class AnalysisError(Exception):
@@ -49,12 +50,24 @@ class DecisionPolicy:
         confidence = float(payload.get("confidence", 0.0))
         risk_level = str(payload.get("risk_level", "uncertain"))
         label = str(payload.get("label", "real"))
+        raw = payload.get("raw")
 
         uncertainty = "low"
         if confidence < 0.2:
             uncertainty = "high"
         elif confidence < 0.6:
             uncertainty = "medium"
+
+        if isinstance(raw, Mapping) and raw.get("selective_review") is True:
+            return Decision(
+                value="review",
+                label="空间一致性不足，需人工复核",
+                recommended_action=(
+                    "空间复核发现整图与局部信号不一致，系统不会自动暂缓或放行；"
+                    "请核验原始文件、来源与拍摄上下文。"
+                ),
+                uncertainty="high",
+            )
 
         if confidence < 0.2 or risk_level == "uncertain":
             return Decision(
@@ -166,6 +179,7 @@ class AnalysisService:
         raw = result.get("raw")
         if isinstance(raw, Mapping) and raw.get("model_version"):
             model_version = str(raw["model_version"])
+        reliability = _public_reliability(raw)
 
         probability = round(
             max(0.0, min(1.0, float(result.get("probability_ai_generated", 0.0)))),
@@ -193,6 +207,7 @@ class AnalysisService:
                 "结果已转换为发布风险决策",
             ],
             "raw": {"model_version": model_version},
+            "reliability": reliability,
         }
         propagation_views = (
             make_propagation_views(image)
@@ -202,7 +217,7 @@ class AnalysisService:
         safe_result["propagation_views"] = propagation_views
         report = build_authenticity_report(safe_result)
         report["recommended_action"] = decision.recommended_action
-        report["summary"] = decision.recommended_action
+        report["summary"] = f"{decision.label}。{SCORE_NOTICE}"
         elapsed_ms = max(0, round((perf_counter() - started) * 1000))
 
         public_payload = {
@@ -211,12 +226,28 @@ class AnalysisService:
             "decision": decision.value,
             "decision_label": decision.label,
             "risk_level": safe_result["risk_level"],
+            "model_score": safe_result["probability_ai_generated"],
+            "score_kind": "uncalibrated_ai_generation_score",
+            "decision_margin": safe_result["confidence"],
+            "score_notice": SCORE_NOTICE,
+            "reliability": reliability,
+            "localization": {
+                "available": False,
+                "annotations": [],
+                "reason": "image_level_model",
+            },
+            "provenance": {
+                "available": False,
+                "hops": [],
+                "reason": "source_data_not_provided",
+            },
             "ai_probability": safe_result["probability_ai_generated"],
             "confidence": safe_result["confidence"],
             "uncertainty": decision.uncertainty,
             "recommended_action": decision.recommended_action,
             "image": dict(safe_result["image"]),
             "propagation_views": propagation_views,
+            "robustness_views": propagation_views,
             "report": report,
             "warnings": [DISCLAIMER],
             "latency_ms": elapsed_ms,
@@ -229,6 +260,22 @@ class AnalysisService:
             "decision_label": decision.label,
             "uncertainty": decision.uncertainty,
             "recommended_action": decision.recommended_action,
+            "model_score": safe_result["probability_ai_generated"],
+            "score_kind": "uncalibrated_ai_generation_score",
+            "decision_margin": safe_result["confidence"],
+            "score_notice": SCORE_NOTICE,
+            "reliability": reliability,
+            "localization": {
+                "available": False,
+                "annotations": [],
+                "reason": "image_level_model",
+            },
+            "provenance": {
+                "available": False,
+                "hops": [],
+                "reason": "source_data_not_provided",
+            },
+            "robustness_views": propagation_views,
             "warnings": [DISCLAIMER],
             "latency_ms": elapsed_ms,
         }
@@ -285,3 +332,25 @@ def _safe_filename(filename: str) -> str:
     normalized = (filename or "upload").replace("\\", "/").replace("\x00", "")
     name = normalized.rsplit("/", 1)[-1].strip() or "upload"
     return name[:255]
+
+
+def _public_reliability(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        return {
+            "performed": False,
+            "status": "not_required",
+            "reason": "secondary_check_not_required",
+        }
+    performed = raw.get("spatial_recheck_performed") is True
+    inconsistent = performed and raw.get("selective_review") is True
+    return {
+        "performed": performed,
+        "status": "inconsistent" if inconsistent else "consistent" if performed else "not_required",
+        "reason": (
+            "spatial_score_inconsistency"
+            if inconsistent
+            else "spatial_recheck_consistent"
+            if performed
+            else "secondary_check_not_required"
+        ),
+    }

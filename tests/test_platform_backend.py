@@ -119,9 +119,9 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertEqual(report["subject"]["backend"], payload["backend"])
         self.assertEqual(
             [section["title"] for section in report["sections"]],
-            ["检测结论", "传播链路证据", "处置建议"],
+            ["检测结论", "鲁棒性复核视图", "处置建议"],
         )
-        self.assertTrue(any("传播链路" in item for item in report["export_highlights"]))
+        self.assertTrue(any("鲁棒性视图" in item for item in report["export_highlights"]))
         self.assertTrue(report["recommended_action"])
         self.assertIn("技术辅助", report["disclaimer"])
 
@@ -142,43 +142,42 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn("function buildReportHtml", script)
         self.assertIn("ShareGuard影像鉴真报告", script)
 
-    def test_static_page_exposes_competition_judge_workflows(self):
+    def test_production_page_excludes_sample_case_workflows(self):
         static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
         html = (static / "index.html").read_text(encoding="utf-8")
         script = (static / "dossier.js").read_text(encoding="utf-8")
 
-        self.assertIn("媒体发布前核验", script)
-        self.assertIn("品牌谣言澄清", script)
-        self.assertIn("平台人工复核", script)
-        self.assertIn("GLOBAL THREAT LEVEL", html)
-        self.assertIn("const sampleCases", script)
-        self.assertIn("function loadSampleCase", script)
+        self.assertNotIn("const sampleCases", script)
+        self.assertNotIn("function loadSampleCase", script)
+        self.assertIn("PRIVATE MODEL / LIVE RESULTS ONLY", html)
+        self.assertIn("不显示模拟案件", script)
         self.assertIn("function renderCaseContext", script)
 
-    def test_static_page_supports_github_pages_demo_fallback(self):
+    def test_production_page_has_no_github_pages_demo_fallback(self):
         static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
         html = (static / "index.html").read_text(encoding="utf-8")
         script = (static / "dossier.js").read_text(encoding="utf-8")
 
-        self.assertIn("产品演示模式，当前结果仅展示工作流", html)
-        self.assertIn("static-demo", script)
-        self.assertIn("function buildStaticDemoPayload", script)
-        self.assertIn("function shouldUseStaticDemo", script)
-        self.assertIn("function makeStaticPropagationViews", script)
-        self.assertIn("function buildStaticReport", script)
+        self.assertNotIn("产品演示模式，当前结果仅展示工作流", html)
+        self.assertNotIn("static-demo", script)
+        self.assertNotIn("function buildStaticDemoPayload", script)
+        self.assertNotIn("function shouldUseStaticDemo", script)
+        self.assertNotIn("function makeStaticPropagationViews", script)
+        self.assertIn("renderAnalysisUnavailable", script)
 
-    def test_static_page_opens_as_trust_workbench_with_flagship_case(self):
+    def test_static_page_opens_as_empty_live_trust_workbench(self):
         static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
         html = (static / "index.html").read_text(encoding="utf-8")
         script = (static / "dossier.js").read_text(encoding="utf-8")
 
         self.assertIn("ShareGuard影像信任工作台", html)
-        self.assertIn('const DEFAULT_CASE_ID = "geopolitical"', script)
-        self.assertIn("loadSampleCase(DEFAULT_CASE_ID)", script)
-        self.assertIn("ACTION REQUIRED", html)
+        self.assertIn("const EMPTY_CASE", script)
+        self.assertIn("initializeProductionWorkbench", script)
+        self.assertNotIn("loadSampleCase(DEFAULT_CASE_ID)", script)
+        self.assertIn("LIVE MODEL RESULT", html)
         self.assertIn("建议动作", html)
-        self.assertIn("AI生成风险", html)
-        self.assertIn("暂缓发布", html)
+        self.assertIn("AI生成模型分数", html)
+        self.assertIn("尚无结论", html)
         self.assertNotIn(">Demo Engine<", html)
 
     def test_static_page_uses_interactive_dossier_visual_system(self):
@@ -200,7 +199,7 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertNotIn("border-radius", css)
         self.assertIn("@media (prefers-reduced-motion: reduce)", css)
 
-    def test_static_page_replaces_mock_backend_with_product_demo_payload(self):
+    def test_static_page_rejects_mock_backend_without_demo_substitution(self):
         script = (
             Path(__file__).resolve().parents[1]
             / "shareguard"
@@ -211,8 +210,9 @@ class PlatformBackendTests(unittest.TestCase):
 
         self.assertIn('response.headers.get("X-ShareGuard-Demo") === "true"', script)
         self.assertIn('payload.backend === "mock"', script)
-        self.assertIn("后端为mock时切换到公开演示结果", script)
-        self.assertIn("setAnalysisPayload(await buildStaticDemoPayload())", script)
+        self.assertIn("正式工作台拒绝演示模型响应", script)
+        self.assertNotIn("setAnalysisPayload(await buildStaticDemoPayload())", script)
+        self.assertIn("renderAnalysisUnavailable", script)
 
     def test_static_page_implements_editorial_forensics_flow(self):
         root = Path(__file__).resolve().parents[1]
@@ -241,7 +241,7 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn("ShareGuard Evidence Package Verifier", verifier)
         self.assertIn("crypto.subtle.digest", verifier_script)
         self.assertIn("crypto.subtle.verify", verifier_script)
-        self.assertIn("assets/flagship-event.jpg", html)
+        self.assertNotIn("assets/flagship-event.jpg", html)
         self.assertTrue(flagship.is_file())
         self.assertGreater(flagship.stat().st_size, 10_000)
 
@@ -792,6 +792,55 @@ class PlatformBackendTests(unittest.TestCase):
             self.assertNotIn("alpha_clip_l", response_text)
             self.assertNotIn("threshold", response_text)
             self.assertNotIn("group_scores", response_text)
+
+    def test_fusion_bundle_flags_spatially_inconsistent_saturated_score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "manifest.json").write_text(
+                json.dumps({
+                    "bundle_type": "noisyshare_fusion",
+                    "checkpoint_format": "safetensors",
+                    "method": "clip_b_l_score_fusion",
+                    "alpha_clip_l": 0.47,
+                    "threshold": 0.32,
+                    "groups": {"clip_b": [], "clip_l": []},
+                }),
+                encoding="utf-8",
+            )
+
+            class FakePredictor:
+                def __init__(self):
+                    self.scores = iter([0.9999, 0.06, 0.39])
+
+                def predict(self, image):
+                    score = next(self.scores)
+                    return {
+                        "probability_ai_generated": score,
+                        "confidence": 0.99,
+                        "raw": {
+                            "group_scores": {"clip_b": score, "clip_l": score},
+                            "threshold": 0.32,
+                            "alpha_clip_l": 0.47,
+                        },
+                    }
+
+            backend = NoisyShareFusionBundleBackend(
+                str(root),
+                predictor_factory=lambda manifest, bundle_dir, device=None: FakePredictor(),
+            )
+            image = Image.open(io.BytesIO(png_bytes(size=(40, 30)))).convert("RGB")
+
+            result = backend.analyze(image, filename="camera-photo.png").to_dict()
+
+            self.assertTrue(result["raw"]["spatial_recheck_performed"])
+            self.assertTrue(result["raw"]["selective_review"])
+            self.assertEqual(
+                result["raw"]["reliability_reason"],
+                "spatial_score_inconsistency",
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn("0.06", serialized)
+            self.assertNotIn("0.39", serialized)
 
     def test_fusion_bundle_warmup_loads_predictor_once(self):
         with tempfile.TemporaryDirectory() as tmp:

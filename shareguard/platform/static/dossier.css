@@ -665,12 +665,59 @@ p {
 
 .evidence-viewport > img,
 .original-layer img {
-  object-fit: cover;
-  object-position: center 55%;
+  object-fit: contain;
+  object-position: center;
 }
 
 #processedImage {
-  filter: grayscale(1) contrast(1.28) brightness(0.82);
+  filter: none;
+}
+
+.empty-evidence-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  padding: 40px;
+  color: var(--ink-soft);
+  background: var(--surface);
+  text-align: center;
+}
+
+.empty-evidence-state[hidden] {
+  display: none;
+}
+
+.empty-evidence-state strong {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+
+.annotation-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.annotation-layer .annotation-point {
+  min-width: 44px;
+  min-height: 44px;
+  pointer-events: auto;
+}
+
+.localization-status {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, .62);
+  color: var(--white);
+  background: rgba(9, 9, 9, .78);
+  font-family: var(--font-mono);
+  font-size: 9px;
 }
 
 .original-layer {
@@ -908,8 +955,20 @@ p {
 
 .evidence-versions {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   border-bottom: 1px solid var(--line);
+}
+
+.capability-empty {
+  padding: 18px;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.evidence-versions > .capability-empty {
+  grid-column: 1 / -1;
 }
 
 .evidence-version {
@@ -1142,6 +1201,23 @@ p {
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: 8px;
+}
+
+.provenance-hop-list {
+  display: grid;
+  gap: 1px;
+  margin-top: 10px;
+  background: var(--line-soft);
+}
+
+.provenance-hop-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  padding: 10px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 9px;
 }
 
 .decision-actions {

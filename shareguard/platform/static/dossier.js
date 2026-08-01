@@ -1,9 +1,19 @@
 "use strict";
 
-const DEFAULT_CASE_ID = "geopolitical";
 const EMBED_MEDIA_LIMIT_BYTES = 8 * 1024 * 1024;
 const i18n = window.ShareGuardI18n;
 const runtimeConfig = window.ShareGuardRuntime || {};
+const EMPTY_CASE = Object.freeze({
+  id: "upload",
+  code: "PENDING",
+  title: "用户导入影像核验",
+  workflow: "真实模型核验",
+  source: "USER UPLOAD",
+  handler: "CURRENT SESSION",
+  timestamp: "—",
+  briefing: "导入影像后，系统将调用私有模型生成本次文件的图像级判定。",
+  deadlineSeconds: 0
+});
 const modelConnection = {
   apiBaseUrl: normalizeApiBaseUrl(runtimeConfig.apiBaseUrl),
   username: "",
@@ -13,162 +23,25 @@ const modelConnection = {
   status: "idle"
 };
 
-const sampleCases = [
-  {
-    id: "geopolitical",
-    code: "SG-202607-44B",
-    title: "突发地缘政治医疗事件",
-    workflow: "媒体发布前核验",
-    source: "ANONYMOUS TELEGRAM RELAY",
-    handler: "DESK-EDITOR / HKG-04",
-    timestamp: "2026-07-11 14:28:20 UTC",
-    briefing: "匿名频道发布的突发现场影像正在跨平台传播，编辑部面临即时发布压力，原始 EXIF 与可信来源尚未取得。",
-    probability: 0.87,
-    confidence: 0.81,
-    uncertainty: "中等",
-    decision: "hold",
-    verdictEn: "SUSPEND",
-    verdictZh: "暂缓发布",
-    action: "取得原始素材并转交人工复核",
-    narrative: "系统在多次传播退化后仍检测到稳定的生成性痕迹。画面中的文字结构和环境光向存在相互独立的异常信号。",
-    evidence: [
-      "疑似文字幻觉在压缩版本中持续存在。",
-      "主体边缘与背景景深过渡不一致。",
-      "缺失可核验的原始 EXIF 数据。"
-    ],
-    deadlineSeconds: 346
-  },
-  {
-    id: "newsroom",
-    code: "SG-202607-51C",
-    title: "突发现场图来源核验",
-    workflow: "媒体发布前核验",
-    source: "WIRE DESK / USER SUBMISSION",
-    handler: "NEWS-DESK / HKG-02",
-    timestamp: "2026-07-11 14:31:04 UTC",
-    briefing: "用户提交的突发现场截图缺少原始文件，多个传播版本中的局部纹理出现不一致，需要编辑复核。",
-    probability: 0.48,
-    confidence: 0.56,
-    uncertainty: "高",
-    decision: "review",
-    verdictEn: "REVIEW",
-    verdictZh: "人工复核",
-    action: "联系投稿者取得原始文件",
-    narrative: "当前证据处于灰色区间。传播压缩削弱了局部信号，系统无法独立形成可靠放行结论。",
-    evidence: [
-      "截图传播造成高频细节缺失。",
-      "局部边缘信号在不同版本间不稳定。",
-      "来源身份与首次发布时间未核验。"
-    ],
-    deadlineSeconds: 614
-  },
-  {
-    id: "brand",
-    code: "SG-202607-58A",
-    title: "品牌活动图舆情核验",
-    workflow: "品牌谣言澄清",
-    source: "SOCIAL LISTENING / WEIBO",
-    handler: "BRAND-RISK / HKG-11",
-    timestamp: "2026-07-11 14:34:42 UTC",
-    briefing: "疑似伪造品牌活动图正在社交平台扩散，公关团队需要在回应前形成可转交法务的证据摘要。",
-    probability: 0.73,
-    confidence: 0.74,
-    uncertainty: "中等",
-    decision: "hold",
-    verdictEn: "SUSPEND",
-    verdictZh: "暂缓发布",
-    action: "暂停转发并启动品牌法务复核",
-    narrative: "跨传播版本保留了稳定的生成性结构异常，建议在取得活动方原始素材前停止外部使用。",
-    evidence: [
-      "品牌标识边缘存在非自然重采样。",
-      "人物与背景的噪声分布不一致。",
-      "当前素材无法关联到可信原始发布者。"
-    ],
-    deadlineSeconds: 228
-  },
-  {
-    id: "platform",
-    code: "SG-202607-63D",
-    title: "内容平台边界样本复核",
-    workflow: "平台人工复核",
-    source: "TRUST & SAFETY QUEUE",
-    handler: "PLATFORM-TNS / HKG-08",
-    timestamp: "2026-07-11 14:36:19 UTC",
-    briefing: "自动审核结果接近策略边界，平台需要人工确认是否允许继续分发，并记录覆盖理由。",
-    probability: 0.42,
-    confidence: 0.59,
-    uncertainty: "高",
-    decision: "review",
-    verdictEn: "REVIEW",
-    verdictZh: "人工复核",
-    action: "保持限流并等待资深审核员确认",
-    narrative: "现有传播版本不足以形成单一结论，系统将决策权移交人工审核并保留完整操作日志。",
-    evidence: [
-      "多个子证据方向不一致。",
-      "压缩程度超过常规平台转码范围。",
-      "建议补充相邻帧或原始上传版本。"
-    ],
-    deadlineSeconds: 772
-  }
-];
-
-const interceptSeed = [
-  ["14:27:58", "NEWSROOM-API", "IMG_4418.WEBP", "ALLOW", "AUTO"],
-  ["14:28:02", "SOCIAL-LISTEN", "POST-98A1.JPG", "ALLOW", "AUTO"],
-  ["14:28:07", "WIRE-DESK", "BREAKING-20.PNG", "HOLD", "DOSSIER"],
-  ["14:28:09", "BRAND-WATCH", "CAMPAIGN-13.JPG", "ALLOW", "AUTO"],
-  ["14:28:12", "PLATFORM-TNS", "QUEUE-882.WEBP", "REVIEW", "HUMAN"],
-  ["14:28:15", "NEWSROOM-API", "FIELD-440.JPG", "ALLOW", "AUTO"],
-  ["14:28:18", "LEGAL-INTAKE", "EXHIBIT-7.PNG", "HOLD", "DOSSIER"],
-  ["14:28:20", "TELEGRAM-RELAY", "SG-44B.JPG", "HOLD", "DOSSIER"],
-  ["14:28:23", "SOCIAL-LISTEN", "POST-98A2.JPG", "ALLOW", "AUTO"],
-  ["14:28:26", "PLATFORM-TNS", "QUEUE-883.WEBP", "ALLOW", "AUTO"]
-];
-
 const state = {
-  activeCase: sampleCases[0],
+  activeCase: { ...EMPTY_CASE },
   activePayload: null,
   activeViewIndex: 0,
   currentFile: null,
-  currentDataUrl: "assets/flagship-event.jpg",
+  currentDataUrl: "",
   currentObjectUrl: null,
   propagationViews: [],
-  waterfallRows: interceptSeed.map((row, index) => ({
-    time: row[0],
-    ingress: row[1],
-    asset: row[2],
-    decision: row[3],
-    route: row[4],
-    id: `seed-${index}`
-  })),
-  custodyEvents: [
-    { time: "12:05:00", actor: "INGEST", event: "Initial appearance recorded from anonymous Telegram relay", integrity: "RECORDED" },
-    { time: "12:30:14", actor: "SYSTEM", event: "Platform shift detected; lossy recompression fingerprint added", integrity: "VERIFIED" },
-    { time: "14:22:08", actor: "DESK-EDITOR", event: "Current asset uploaded through editorial intake", integrity: "VERIFIED" },
-    { time: "14:28:20", actor: "ANALYSIS", event: "Risk decision generated and routed to human authority", integrity: "APPENDED" },
-    { time: "14:40:11", actor: "LEGAL", event: "Suspension recommendation acknowledged for compliance review", integrity: "APPENDED" }
-  ],
-  reviewerNotes: [
-    {
-      time: "14:35",
-      actor: "Editorial",
-      key: "review.sample1",
-      text: "医院标识周围的像素过渡不自然。在取得原始 EXIF 前不建议发布。"
-    },
-    {
-      time: "14:40",
-      actor: "Legal Dept.",
-      key: "review.sample2",
-      text: "同意暂缓发布。该素材具有明显名誉与市场风险，建议保留证据包。"
-    }
-  ],
+  annotations: [],
+  provenance: { available: false, hops: [], reason: "source_data_not_provided" },
+  waterfallRows: [],
+  custodyEvents: [],
+  reviewerNotes: [],
   evidencePackageBlob: null,
   evidencePackageName: ""
 };
 
 const dom = {};
 let toastTimer = null;
-let assetDataUrlPromise = null;
 let narrativeAnimationToken = 0;
 let touchLensLocked = false;
 let touchPointerStart = null;
@@ -183,17 +56,6 @@ function caseText(item, field) {
   return t(`case.${item.id}.${field}`, fallback);
 }
 
-function workflowText(item) {
-  const workflowKeys = {
-    geopolitical: "workflow.media",
-    newsroom: "workflow.media",
-    brand: "workflow.brand",
-    platform: "workflow.platform",
-    upload: "workflow.media"
-  };
-  return t(workflowKeys[item.id], item.workflow);
-}
-
 function cacheDom() {
   [
     "imageInput", "engineLabel", "systemClock", "intakeRate", "queueCount",
@@ -201,7 +63,8 @@ function cacheDom() {
     "waterfallFeed", "quarantineZone", "quarantineCount", "casePicker",
     "stageCaseCode", "dossierTitle", "caseTimestamp", "caseSource", "caseHandler",
     "caseContext", "evidenceViewport", "processedImage", "previewImage", "originalLayer",
-    "forensicCanvas", "forensicLens", "compareRange", "stageViewLabel",
+    "forensicCanvas", "forensicLens", "compareRange", "stageViewLabel", "emptyEvidenceState",
+    "splitIndicator", "comparisonControl",
     "stageStatusLabel", "viewGrid", "fileMeta", "decisionPanel", "decisionTimestamp",
     "decisionTitle", "riskProbability", "confidenceValue", "uncertaintyValue",
     "recommendedAction", "machineNarrative", "evidenceList", "forceReleaseButton",
@@ -214,7 +77,8 @@ function cacheDom() {
     "releaseDialog", "confirmReleaseButton", "dropOverlay", "toast",
     "modelConnectionButton", "modelConnectionLabel", "modelConnectionDialog",
     "modelConnectionForm", "modelEndpoint", "modelUsername", "modelPassword",
-    "modelConnectionStatus", "modelDisconnectButton", "closeModelConnectionButton"
+    "modelConnectionStatus", "modelDisconnectButton", "closeModelConnectionButton",
+    "annotationLayer", "provenanceBody", "provenanceStatus"
   ].forEach((id) => {
     dom[id] = document.getElementById(id);
   });
@@ -251,7 +115,14 @@ function init() {
     switchView("dossier", { updateHistory: false });
   }
 
-  loadSampleCase(DEFAULT_CASE_ID);
+  initializeProductionWorkbench();
+}
+
+function initializeProductionWorkbench() {
+  renderCaseContext(state.activeCase);
+  renderAnalysisUnavailable(t("model.awaitingUpload", "导入影像后开始真实模型分析。"));
+  dom.stageStatusLabel.textContent = t("model.awaitingUploadShort", "尚未导入影像");
+  dom.fileMeta.textContent = t("model.awaitingUploadShort", "尚未导入影像");
 }
 
 function bindViewControls() {
@@ -293,38 +164,8 @@ function switchView(viewName, options = {}) {
 }
 
 function renderCasePicker() {
-  dom.casePicker.innerHTML = sampleCases.map((item) => `
-    <article class="quarantine-card ${item.id === state.activeCase.id ? "active" : ""}" data-case-card="${escapeHtml(item.id)}">
-      <header>
-        <span>[ ${escapeHtml(workflowText(item))} ]</span>
-        <time data-countdown="${item.deadlineSeconds}">${formatCountdown(item.deadlineSeconds)}</time>
-      </header>
-      <h3>${escapeHtml(caseText(item, "title"))}</h3>
-      <p>${escapeHtml(caseText(item, "briefing"))}</p>
-      <footer>
-        <small>${escapeHtml(item.code)} / ${(item.probability * 100).toFixed(0)}% RISK</small>
-        <button type="button" data-case="${escapeHtml(item.id)}">${escapeHtml(t("case.open", "提取案宗"))}</button>
-      </footer>
-    </article>
-  `).join("");
-
-  dom.casePicker.querySelectorAll("[data-case]").forEach((button) => {
-    button.addEventListener("click", () => loadSampleCase(button.dataset.case));
-  });
-  dom.quarantineCount.textContent = String(sampleCases.length).padStart(2, "0");
-}
-
-async function loadSampleCase(caseId) {
-  const item = sampleCases.find((candidate) => candidate.id === caseId) || sampleCases[0];
-  state.activeCase = item;
-  state.currentFile = null;
-  releaseCurrentObjectUrl();
-  state.currentDataUrl = await loadFlagshipImageDataUrl();
-  renderCasePicker();
-  renderCaseContext(item);
-  setAnalysisPayload(await buildStaticDemoPayload({ caseItem: item }));
-  addCustodyEvent("DESK-EDITOR", `Dossier ${item.code} opened for human review`, "APPENDED");
-  switchView("dossier");
+  dom.casePicker.innerHTML = `<div class="capability-empty">${escapeHtml(t("radar.notConnected", "未接入实时业务队列，不显示模拟案件。"))}</div>`;
+  dom.quarantineCount.textContent = "00";
 }
 
 function renderCaseContext(item) {
@@ -388,14 +229,23 @@ async function handleFile(file) {
   const stamp = new Date();
   const code = `SG-UPLOAD-${String(stamp.getTime()).slice(-6)}`;
   state.activeCase = {
-    ...sampleCases[0],
     id: "upload",
     code,
     title: t("case.upload.title", "用户导入影像核验"),
+    workflow: t("workflow.live", "真实模型核验"),
     source: "EDITORIAL DROPZONE",
+    handler: "CURRENT SESSION",
     timestamp: `${stamp.toISOString().slice(0, 19).replace("T", " ")} UTC`,
-    briefing: t("case.upload.briefing", "该影像由当前工作台导入，系统正在生成传播版本、风险结论和可归档处置记录。")
+    briefing: t("case.upload.briefing", "该影像由当前工作台导入，系统将调用私有模型生成图像级判定与本图衍生鲁棒性视图。")
   };
+  state.activePayload = null;
+  state.annotations = [];
+  state.provenance = { available: false, hops: [], reason: "source_data_not_provided" };
+  state.propagationViews = [];
+  dom.emptyEvidenceState.hidden = true;
+  dom.processedImage.hidden = false;
+  dom.originalLayer.hidden = false;
+  dom.reviewerImage.hidden = false;
   renderCaseContext(state.activeCase);
   dom.fileMeta.textContent = `${file.name.toUpperCase()} / ${dimensions.width} × ${dimensions.height} / ${formatBytes(file.size)}`;
   dom.previewImage.src = state.currentDataUrl;
@@ -408,33 +258,22 @@ async function handleFile(file) {
 
 async function analyzeCurrentFile() {
   document.body.classList.add("is-analyzing");
-  dom.stageStatusLabel.textContent = t("evidence.building", "正在形成证据链");
+  dom.stageStatusLabel.textContent = t("evidence.building", "正在调用私有模型");
   let analysisCompleted = false;
   try {
-    if (shouldUseStaticDemo()) {
-      setAnalysisPayload(await buildStaticDemoPayload());
-      dom.engineLabel.textContent = t("engine.demo", "产品演示模式，当前结果仅展示工作流");
-      analysisCompleted = true;
-      return;
-    }
-
     if (usesRemoteModel() && !modelConnection.connected) {
       modelConnection.pendingAnalysis = true;
       renderAnalysisUnavailable(t("model.waiting", "等待连接私有模型后开始真实分析。"));
       openModelConnectionDialog({
         state: "idle",
-        message: t("model.authorizationRequired", "请输入演示凭证以启动这张影像的真实模型分析。")
+        message: t("model.authorizationRequired", "请输入访问凭证以启动这张影像的真实模型分析。")
       });
       return;
     }
 
     const body = new FormData();
-    if (state.currentFile) {
-      body.append("image", state.currentFile, state.currentFile.name);
-    } else {
-      const blob = await dataUrlToBlob(state.currentDataUrl);
-      body.append("image", blob, "flagship-event.jpg");
-    }
+    if (!state.currentFile) throw new Error(t("model.noImage", "尚未选择待分析影像。"));
+    body.append("image", state.currentFile, state.currentFile.name);
     const requestOptions = {
       method: "POST",
       body,
@@ -473,15 +312,8 @@ async function analyzeCurrentFile() {
     }
     const isDemoResponse = response.headers.get("X-ShareGuard-Demo") === "true";
     const payload = await response.json();
-    if (!Array.isArray(payload.propagation_views) || !payload.propagation_views.length) {
-      payload.propagation_views = await makeStaticPropagationViews(state.currentDataUrl);
-    }
     if (isDemoResponse || payload.backend === "mock") {
-      // 后端为mock时切换到公开演示结果，避免把占位随机数呈现为产品结论。
-      setAnalysisPayload(await buildStaticDemoPayload());
-      dom.engineLabel.textContent = t("engine.demo", "产品演示模式，当前结果仅展示工作流");
-      showToast(t("toast.demo", "当前服务处于产品演示模式，结论用于展示工作流，不代表对上传文件的真实鉴定。"));
-      analysisCompleted = true;
+      throw new Error(t("model.demoRejected", "正式工作台拒绝演示模型响应。"));
     } else {
       setAnalysisPayload(payload);
       analysisCompleted = true;
@@ -504,26 +336,15 @@ async function analyzeCurrentFile() {
       renderAnalysisUnavailable(t("model.analysisUnavailable", "真实模型未返回结果，请检查本机服务或稍后重试。"));
       showToast(`${t("model.analysisUnavailable", "真实模型未返回结果，请检查本机服务或稍后重试。")}${error?.message ? ` ${error.message}` : ""}`);
     } else {
-      setAnalysisPayload(await buildStaticDemoPayload());
-      dom.engineLabel.textContent = t("engine.demo", "产品演示模式，当前结果仅展示工作流");
-      showToast(`${t("toast.serviceFallback", "私有分析服务暂不可用，已切换至产品演示结果。")}${error?.message ? ` ${error.message}` : ""}`);
-      analysisCompleted = true;
+      renderAnalysisUnavailable(t("model.analysisUnavailable", "真实模型未返回结果，请检查服务后重试。"));
+      showToast(`${t("model.analysisUnavailable", "真实模型未返回结果，请检查服务后重试。")}${error?.message ? ` ${error.message}` : ""}`);
     }
   } finally {
     document.body.classList.remove("is-analyzing");
     dom.stageStatusLabel.textContent = analysisCompleted
-      ? t("evidence.chainReady", "传播链路已识别")
+      ? t("evidence.analysisReady", "真实模型分析已完成")
       : t("model.noFinding", "尚未生成真实模型结论");
   }
-}
-
-function shouldUseStaticDemo() {
-  return window.location.protocol === "file:"
-    || ((isGithubPages() || isConfiguredRemotePage()) && !usesRemoteModel());
-}
-
-function isGithubPages() {
-  return /\.github\.io$/i.test(window.location.hostname);
 }
 
 function isConfiguredRemotePage() {
@@ -580,131 +401,170 @@ function basicAuthorization(username, password) {
 function renderAnalysisUnavailable(message) {
   narrativeAnimationToken += 1;
   state.activePayload = null;
-  renderViews({
-    propagation_views: [{
-      id: "current",
-      label: t("view.current", "当前版本"),
-      data_url: state.currentDataUrl,
-      size: "AWAITING MODEL",
-      filter: "grayscale(1) contrast(1.08)"
-    }]
-  });
+  state.annotations = [];
+  state.provenance = { available: false, hops: [], reason: "source_data_not_provided" };
+  renderViews({ propagation_views: [] });
+  renderAnnotations();
+  renderProvenance();
   dom.decisionPanel.dataset.decision = "review";
-  dom.decisionTitle.innerHTML = `${escapeHtml(t("model.noDecisionEn", "MODEL OFFLINE"))}<br><em>${escapeHtml(t("model.noDecision", "尚无鉴真结论"))}</em>`;
+  const waitingForUpload = !state.currentFile;
+  const noResultEn = waitingForUpload ? "NO RESULT" : t("model.noDecisionEn", "MODEL OFFLINE");
+  const noResultLocal = waitingForUpload ? t("model.noResult", "尚无模型结果") : t("model.noDecision", "尚无鉴真结论");
+  dom.decisionTitle.innerHTML = `${escapeHtml(noResultEn)}<br><em>${escapeHtml(noResultLocal)}</em>`;
   dom.riskProbability.textContent = "—";
   dom.confidenceValue.textContent = "—";
   dom.uncertaintyValue.textContent = "—";
-  dom.recommendedAction.textContent = t("model.connectAction", "连接私有模型后重新分析");
+  dom.recommendedAction.textContent = waitingForUpload
+    ? t("model.importAction", "导入影像以开始真实分析")
+    : t("model.connectAction", "连接私有模型后重新分析");
   dom.machineNarrative.textContent = message;
   dom.evidenceList.innerHTML = "";
   dom.forceReleaseButton.disabled = true;
   dom.sealButton.disabled = true;
-  dom.reviewerVerdict.textContent = t("model.noDecisionEn", "MODEL OFFLINE");
+  [dom.saveHtmlReportButton, dom.printReportButton, dom.downloadJsonButton, dom.copyReportButton].forEach((button) => { button.disabled = true; });
+  dom.reviewerVerdict.textContent = noResultEn;
   dom.reviewerNarrative.textContent = message;
-}
-
-async function buildStaticDemoPayload(options = {}) {
-  const item = options.caseItem || state.activeCase || sampleCases[0];
-  const source = state.currentDataUrl || await loadFlagshipImageDataUrl();
-  const views = await makeStaticPropagationViews(source);
-  const report = buildStaticReport(item);
-  return {
-    backend: "static-demo",
-    file_name: state.currentFile?.name || "flagship-event.jpg",
-    probability_ai_generated: item.probability,
-    confidence: item.confidence,
-    risk_level: item.decision === "hold" ? "high" : item.decision === "review" ? "medium" : "low",
-    label: item.decision === "allow" ? "real" : "ai_generated",
-    decision: item.decision,
-    uncertainty: localizeUncertainty(item.uncertainty),
-    report,
-    propagation_views: views,
-    image: { width: 800, height: 1200, mode: "RGB" }
-  };
-}
-
-async function makeStaticPropagationViews(dataUrl) {
-  return [
-    { id: "current", label: t("view.current", "当前版本"), data_url: dataUrl, size: "800 × 1200", filter: "grayscale(1) contrast(1.28) brightness(.82)" },
-    { id: "jpeg", label: t("view.jpeg", "JPEG 重压缩"), data_url: dataUrl, size: "640 × 960", filter: "grayscale(1) contrast(1.42) brightness(.74)" },
-    { id: "resize", label: t("view.resize", "跨平台缩放"), data_url: dataUrl, size: "480 × 720", filter: "grayscale(1) contrast(1.18) blur(.35px)" },
-    { id: "screen", label: t("view.screen", "截图传播"), data_url: dataUrl, size: "720 × 1080", filter: "grayscale(.78) contrast(1.3) brightness(.88)" },
-    { id: "share", label: t("view.share", "多次转发"), data_url: dataUrl, size: "360 × 540", filter: "grayscale(1) contrast(1.5) blur(.65px)" }
-  ];
-}
-
-function buildStaticReport(item = state.activeCase || sampleCases[0]) {
-  const narrative = caseText(item, "summary") || item.narrative;
-  const action = caseText(item, "action") || item.action;
-  const notes = [1, 2, 3]
-    .map((index) => t(`case.${item.id}.note${index}`, item.evidence?.[index - 1]))
-    .filter(Boolean);
-  return {
-    case_id: item.code,
-    conclusion: decisionLabel(item.decision),
-    decision: item.decision,
-    summary: narrative,
-    recommended_action: action,
-    uncertainty: localizeUncertainty(item.uncertainty),
-    sections: [
-      { title: t("report.conclusion", "检测结论"), body: narrative },
-      { title: t("report.propagation", "传播链路证据"), body: t("report.propagationBody", "系统对当前版本、重压缩、缩放、截图和多次转发版本进行了并列复核。") },
-      { title: t("report.action", "处置建议"), body: action }
-    ],
-    notes,
-    disclaimer: t("report.disclaimer", "该结果为技术辅助风险信号，不替代司法鉴定或来源调查。")
-  };
 }
 
 function setAnalysisPayload(payload) {
   const normalized = normalizePayload(payload);
   state.activePayload = normalized;
   state.propagationViews = normalized.propagation_views;
+  state.annotations = normalized.localization.annotations;
+  state.provenance = normalized.provenance;
   renderDecision(normalized);
   renderViews(normalized);
+  renderAnnotations();
+  renderProvenance();
   renderReviewer(normalized);
   updateCustodySummary(normalized);
   resizeForensicCanvas();
   dom.forceReleaseButton.disabled = false;
   dom.sealButton.disabled = false;
+  [dom.saveHtmlReportButton, dom.printReportButton, dom.downloadJsonButton, dom.copyReportButton].forEach((button) => { button.disabled = false; });
 }
 
 function normalizePayload(payload) {
-  const probability = clamp(Number(payload.ai_probability ?? payload.probability_ai_generated ?? state.activeCase.probability), 0, 1);
-  const confidence = clamp(Number(payload.confidence ?? state.activeCase.confidence), 0, 1);
-  const riskLevel = String(payload.risk_level || (probability >= 0.7 ? "high" : probability >= 0.4 ? "medium" : "low"));
-  const decision = String(payload.decision || (riskLevel === "high" ? "hold" : riskLevel === "medium" ? "review" : "allow"));
-  const report = payload.report || buildStaticReport(state.activeCase);
+  if (!payload || typeof payload !== "object") throw new Error("模型响应格式无效");
+  const scoreValue = Number(payload.model_score ?? payload.ai_probability ?? payload.probability_ai_generated);
+  const marginValue = Number(payload.decision_margin ?? payload.confidence);
+  const decision = String(payload.decision || "");
+  if (!Number.isFinite(scoreValue) || !Number.isFinite(marginValue) || !["hold", "review", "allow"].includes(decision)) {
+    throw new Error("模型响应缺少必要的真实判定字段");
+  }
+  const modelScore = clamp(scoreValue, 0, 1);
+  const decisionMargin = clamp(marginValue, 0, 1);
+  const riskLevel = String(payload.risk_level || "uncertain");
+  const report = payload.report && typeof payload.report === "object" ? payload.report : {};
+  const scoreNotice = String(payload.score_notice || report.score_notice || "模型分数未经概率校准，不代表图像为AI生成的事实概率。");
+  const rawViews = Array.isArray(payload.robustness_views)
+    ? payload.robustness_views
+    : Array.isArray(payload.propagation_views)
+      ? payload.propagation_views
+      : [];
+  const generatedViews = rawViews.map((view, index) => ({
+    id: String(view.id || `robustness-${index}`),
+    label: String(view.label || `鲁棒性视图 ${index + 1}`),
+    data_url: String(view.image_data_url || view.data_url || ""),
+    size: view.width && view.height ? `${view.width} × ${view.height}` : String(view.size || "衍生视图"),
+    filter: "none",
+    origin: String(view.origin || "generated_from_upload"),
+    observed: view.observed === true
+  })).filter((view) => view.data_url);
+  const currentView = state.currentDataUrl
+    ? [{ id: "current", label: t("view.uploaded", "上传原图"), data_url: state.currentDataUrl, size: "SOURCE", filter: "none", origin: "uploaded", observed: true }]
+    : [];
+  const localization = payload.localization && payload.localization.available === true
+    ? {
+        available: true,
+        annotations: Array.isArray(payload.localization.annotations)
+          ? payload.localization.annotations.map(normalizeAnnotation).filter(Boolean)
+          : [],
+        reason: ""
+      }
+    : { available: false, annotations: [], reason: String(payload.localization?.reason || "image_level_model") };
+  const provenance = payload.provenance && payload.provenance.available === true
+    ? {
+        available: true,
+        hops: Array.isArray(payload.provenance.hops) ? payload.provenance.hops.map(normalizeProvenanceHop).filter(Boolean) : [],
+        reason: ""
+      }
+    : { available: false, hops: [], reason: String(payload.provenance?.reason || "source_data_not_provided") };
+  const reliability = normalizeReliability(payload.reliability);
+  const summary = String(report.summary || payload.recommended_action || "模型已返回图像级判定。");
+  const recommendedAction = String(report.recommended_action || payload.recommended_action || "请结合来源信息进行人工复核。");
+  const notes = Array.isArray(report.notes)
+    ? report.notes
+    : Array.isArray(report.review_notes)
+      ? report.review_notes
+      : [scoreNotice, "当前模型未返回像素级定位。", "当前请求未提供可信传播链路数据。"];
   return {
     backend: String(payload.backend || ""),
-    file_name: sanitizeFilename(payload.file_name || state.currentFile?.name || "flagship-event.jpg"),
-    probability_ai_generated: probability,
-    confidence,
+    request_id: String(payload.request_id || ""),
+    model_version: String(payload.model_version || ""),
+    file_name: sanitizeFilename(payload.file_name || state.currentFile?.name || "upload"),
+    model_score: modelScore,
+    score_kind: String(payload.score_kind || "uncalibrated_ai_generation_score"),
+    decision_margin: decisionMargin,
+    score_notice: scoreNotice,
+    probability_ai_generated: modelScore,
+    confidence: decisionMargin,
     risk_level: riskLevel,
     decision,
-    uncertainty: localizeUncertainty(payload.uncertainty || report.uncertainty || state.activeCase.uncertainty || "中等"),
+    uncertainty: String(payload.uncertainty || report.uncertainty || "unknown"),
+    reliability,
+    localization,
+    provenance,
     report: {
       conclusion: String(report.conclusion || decisionLabel(decision)),
-      summary: String(report.summary || caseText(state.activeCase, "summary")),
-      recommended_action: String(report.recommended_action || caseText(state.activeCase, "action")),
-      sections: Array.isArray(report.sections) ? report.sections : buildStaticReport(state.activeCase).sections,
-      notes: Array.isArray(report.notes)
-        ? report.notes
-        : Array.isArray(report.review_notes)
-          ? report.review_notes
-          : [...state.activeCase.evidence],
+      summary,
+      recommended_action: recommendedAction,
+      sections: Array.isArray(report.sections) ? report.sections : [],
+      notes: notes.map(String),
       disclaimer: String(report.disclaimer || "该结果为技术辅助风险信号，不替代司法鉴定或来源调查。")
     },
-    propagation_views: Array.isArray(payload.propagation_views) && payload.propagation_views.length
-      ? payload.propagation_views.map((view, index) => ({
-          id: String(view.id || `view-${index}`),
-          label: String(view.label || `传播版本 ${index + 1}`),
-          data_url: String(view.data_url || state.currentDataUrl),
-          size: view.width && view.height ? `${view.width} × ${view.height}` : String(view.size || "传播版本"),
-          filter: String(view.filter || "grayscale(1) contrast(1.22)")
-        }))
-      : []
+    propagation_views: [...currentView, ...generatedViews]
   };
+}
+
+function normalizeAnnotation(annotation, index) {
+  if (!annotation || typeof annotation !== "object") return null;
+  const x = Number(annotation.x);
+  const y = Number(annotation.y);
+  const width = Number(annotation.width ?? annotation.w ?? 0);
+  const height = Number(annotation.height ?? annotation.h ?? 0);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  return {
+    id: String(annotation.id || `annotation-${index + 1}`),
+    label: String(annotation.label || `A${index + 1}`),
+    title: String(annotation.title || "模型定位"),
+    detail: String(annotation.detail || ""),
+    x: clamp(x, 0, 1),
+    y: clamp(y, 0, 1),
+    width: clamp(width, 0, 1),
+    height: clamp(height, 0, 1)
+  };
+}
+
+function normalizeProvenanceHop(hop, index) {
+  if (!hop || typeof hop !== "object") return null;
+  return {
+    order: Number.isFinite(Number(hop.order)) ? Number(hop.order) : index + 1,
+    source: String(hop.source || "UNKNOWN SOURCE"),
+    timestamp: String(hop.timestamp || "—"),
+    operation: String(hop.operation || "RECORDED")
+  };
+}
+
+function normalizeReliability(value) {
+  const performed = value?.performed === true;
+  const reason = String(value?.reason || "secondary_check_not_required");
+  const status = ["inconsistent", "consistent", "not_required"].includes(value?.status)
+    ? value.status
+    : performed
+      ? "consistent"
+      : "not_required";
+  return { performed, status, reason };
 }
 
 function renderDecision(payload) {
@@ -717,15 +577,65 @@ function renderDecision(payload) {
   dom.decisionPanel.dataset.decision = payload.decision;
   dom.decisionTitle.innerHTML = `${escapeHtml(english)}<br><em>${escapeHtml(chinese)}</em>`;
   restartCssAnimation(dom.decisionTitle, "stamp-enter");
-  dom.riskProbability.textContent = formatPercent(payload.probability_ai_generated);
-  dom.confidenceValue.textContent = formatPercent(payload.confidence);
-  dom.uncertaintyValue.textContent = localizeUncertainty(payload.uncertainty);
+  dom.riskProbability.textContent = formatModelScore(payload.model_score);
+  dom.riskProbability.title = payload.score_notice;
+  dom.confidenceValue.textContent = formatModelScore(payload.decision_margin);
+  dom.confidenceValue.title = t("decision.marginHelp", "决策余量表示模型输出与决策边界的相对距离，不是准确率或事实置信度。");
+  dom.uncertaintyValue.textContent = localizeBoundaryState(payload.uncertainty, payload.reliability);
   dom.recommendedAction.textContent = payload.report.recommended_action;
   typeWriterEffect(dom.machineNarrative, payload.report.summary);
   dom.evidenceList.innerHTML = payload.report.notes.slice(0, 4).map((note) => `<li>${escapeHtml(note)}</li>`).join("");
   restartCssAnimation(dom.evidenceList, "evidence-list-decoding");
   const now = new Date();
   dom.decisionTimestamp.textContent = `${now.toISOString().slice(11, 19)} UTC`;
+}
+
+function renderAnnotations() {
+  if (!dom.annotationLayer) return;
+  const annotations = Array.isArray(state.annotations) ? state.annotations : [];
+  if (!annotations.length) {
+    const label = state.activePayload
+      ? t("evidence.noLocalization", "图像级判定 / 模型未提供局部定位")
+      : t("evidence.awaitingLocalization", "等待模型结果 / 尚无定位数据");
+    dom.annotationLayer.innerHTML = `<div class="localization-status">${escapeHtml(label)}</div>`;
+    drawForensics();
+    return;
+  }
+  dom.annotationLayer.innerHTML = annotations.map((annotation, index) => `
+    <button class="annotation-point" type="button" data-annotation-index="${index}"
+      style="left:${annotation.x * 100}%;top:${annotation.y * 100}%;width:${Math.max(annotation.width * 100, 3)}%;height:${Math.max(annotation.height * 100, 3)}%"
+      aria-label="${escapeHtml(annotation.title)}">
+      <span class="annotation-index">${escapeHtml(annotation.label)}</span>
+      <span class="annotation-copy"><b>${escapeHtml(annotation.title)}</b><small>${escapeHtml(annotation.detail)}</small></span>
+    </button>
+  `).join("");
+  dom.annotationLayer.querySelectorAll("[data-annotation-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.annotationIndex);
+      const annotation = state.annotations[index];
+      dom.annotationLayer.querySelectorAll("[data-annotation-index]").forEach((item) => item.classList.toggle("active", item === button));
+      if (annotation) drawForensics({ x: annotation.x + annotation.width / 2, y: annotation.y + annotation.height / 2 });
+      addCustodyEvent("DESK-EDITOR", `Model localization ${annotation?.label || index + 1} inspected`, "APPENDED");
+    });
+  });
+  drawForensics();
+}
+
+function renderProvenance() {
+  if (!dom.provenanceBody || !dom.provenanceStatus) return;
+  const provenance = state.provenance || { available: false, hops: [] };
+  if (!provenance.available || !provenance.hops.length) {
+    dom.provenanceStatus.textContent = "NO SOURCE DATA";
+    dom.provenanceBody.className = "capability-empty";
+    dom.provenanceBody.textContent = t("provenance.unavailable", "未提供来源或传播链路数据，系统不会生成虚构拓扑。");
+    return;
+  }
+  dom.provenanceStatus.textContent = `${provenance.hops.length} VERIFIED HOPS`;
+  dom.provenanceBody.className = "provenance-hop-list";
+  dom.provenanceBody.innerHTML = provenance.hops
+    .sort((a, b) => a.order - b.order)
+    .map((hop) => `<div><span>${escapeHtml(hop.source)}</span><b>${escapeHtml(hop.operation)}</b><time>${escapeHtml(hop.timestamp)}</time></div>`)
+    .join("");
 }
 
 function restartCssAnimation(element, className) {
@@ -765,11 +675,30 @@ function typeWriterEffect(element, text, speed = 14) {
 }
 
 function renderViews(payload) {
-  const views = payload.propagation_views.length
-    ? payload.propagation_views
-    : [{ id: "current", label: t("view.current", "当前版本"), data_url: state.currentDataUrl, size: "CURRENT", filter: "grayscale(1)" }];
+  const suppliedViews = Array.isArray(payload.propagation_views) ? payload.propagation_views : [];
+  const views = suppliedViews.length
+    ? suppliedViews
+    : state.currentDataUrl
+      ? [{ id: "current", label: t("view.uploaded", "上传原图"), data_url: state.currentDataUrl, size: "SOURCE", filter: "none", origin: "uploaded" }]
+      : [];
   state.propagationViews = views;
-  dom.viewGrid.innerHTML = views.slice(0, 5).map((view, index) => `
+  dom.compareRange.disabled = views.length < 2;
+  if (!views.length) {
+    dom.viewGrid.innerHTML = `<div class="capability-empty">${escapeHtml(t("evidence.noViews", "导入影像后显示本图衍生鲁棒性视图。"))}</div>`;
+    dom.emptyEvidenceState.hidden = false;
+    dom.processedImage.hidden = true;
+    dom.originalLayer.hidden = true;
+    dom.splitIndicator.hidden = true;
+    dom.comparisonControl.hidden = true;
+    dom.stageViewLabel.textContent = "NO ASSET";
+    return;
+  }
+  dom.emptyEvidenceState.hidden = true;
+  dom.processedImage.hidden = false;
+  dom.originalLayer.hidden = false;
+  dom.splitIndicator.hidden = false;
+  dom.comparisonControl.hidden = false;
+  dom.viewGrid.innerHTML = views.slice(0, 6).map((view, index) => `
     <button class="evidence-version" type="button" data-view-index="${index}" aria-pressed="${index === 0}">
       <span>V${String(index + 1).padStart(2, "0")}</span>
       <span><strong>${escapeHtml(view.label)}</strong><small>${escapeHtml(view.size)}</small></span>
@@ -786,18 +715,18 @@ function selectEvidenceView(index, options = {}) {
   if (!view) return;
   state.activeViewIndex = index;
   dom.processedImage.src = view.data_url || state.currentDataUrl;
-  dom.previewImage.src = view.data_url || state.currentDataUrl;
+  dom.previewImage.src = state.currentDataUrl;
   dom.reviewerImage.src = state.currentDataUrl;
-  dom.processedImage.style.filter = view.filter || "grayscale(1) contrast(1.22)";
+  dom.processedImage.style.filter = view.filter || "none";
   dom.stageViewLabel.textContent = view.label.toUpperCase();
   dom.stageStatusLabel.textContent = index === 0
-    ? t("evidence.chainReady", "传播链路已识别")
-    : t("evidence.parallelReview", "传播版本并列复核");
+    ? t("evidence.imageLevel", "真实模型已返回图像级结论")
+    : t("evidence.robustnessReview", "本图生成的鲁棒性视图 / 非真实传播证据");
   dom.viewGrid.querySelectorAll("[data-view-index]").forEach((button) => {
     button.setAttribute("aria-pressed", String(Number(button.dataset.viewIndex) === index));
   });
   if (options.record !== false) {
-    addCustodyEvent("DESK-EDITOR", `Propagation view ${view.label} inspected`, "APPENDED");
+    addCustodyEvent("DESK-EDITOR", `Generated robustness view ${view.label} inspected`, "APPENDED");
   }
   window.setTimeout(resizeForensicCanvas, 0);
 }
@@ -808,14 +737,6 @@ function bindDossierControls() {
   };
   dom.compareRange.addEventListener("input", syncComparisonSplit);
   syncComparisonSplit();
-  document.querySelectorAll("[data-annotation]").forEach((button) => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll("[data-annotation]").forEach((item) => item.classList.toggle("active", item === button));
-      const target = button.dataset.annotation === "plate" ? { x: 0.34, y: 0.66 } : { x: 0.62, y: 0.28 };
-      drawForensics(target);
-      addCustodyEvent("DESK-EDITOR", `Anomaly ${button.dataset.annotation} opened as marginalia`, "APPENDED");
-    });
-  });
 }
 
 function setupForensicCanvas() {
@@ -861,7 +782,7 @@ function setupForensicCanvas() {
     }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      document.querySelector("[data-annotation=\"plate\"]")?.click();
+      setForensicLensLocked(!touchLensLocked);
     }
   });
 }
@@ -886,7 +807,9 @@ function setForensicLensLocked(locked) {
     dom.stageStatusLabel.textContent = t("evidence.lensLocked", "取证透镜已锁定，再次轻点释放");
   } else {
     hideForensicLens();
-    dom.stageStatusLabel.textContent = t("evidence.chainReady", "传播链路已识别");
+    dom.stageStatusLabel.textContent = state.activePayload
+      ? t("evidence.imageLevel", "真实模型已返回图像级结论")
+      : t("model.noFinding", "尚未生成真实模型结论");
   }
 }
 
@@ -928,29 +851,43 @@ function drawForensics(pointer) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
-  ctx.strokeStyle = "rgba(211, 47, 47, .92)";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([5, 4]);
-  ctx.strokeRect(rect.width * 0.26, rect.height * 0.52, rect.width * 0.17, rect.height * 0.19);
-  ctx.strokeRect(rect.width * 0.55, rect.height * 0.15, rect.width * 0.18, rect.height * 0.24);
-  ctx.setLineDash([]);
+  const annotations = Array.isArray(state.annotations) ? state.annotations : [];
+  if (annotations.length) {
+    ctx.strokeStyle = "rgba(211, 47, 47, .92)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    annotations.forEach((annotation) => {
+      ctx.strokeRect(
+        rect.width * annotation.x,
+        rect.height * annotation.y,
+        rect.width * annotation.width,
+        rect.height * annotation.height
+      );
+    });
+    ctx.setLineDash([]);
+  }
 
   if (pointer) {
     const x = pointer.x * rect.width;
     const y = pointer.y * rect.height;
-    const radius = Math.min(86, rect.width * 0.1);
-    const heat = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    heat.addColorStop(0, "rgba(211,47,47,.38)");
-    heat.addColorStop(0.55, "rgba(217,119,6,.18)");
-    heat.addColorStop(1, "rgba(211,47,47,0)");
-    ctx.fillStyle = heat;
-    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-    ctx.strokeStyle = "rgba(255,255,255,.86)";
-    ctx.strokeRect(x - 78, y - 78, 156, 156);
+    const radius = Math.min(78, rect.width * 0.1);
+    ctx.strokeStyle = "rgba(255,255,255,.9)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y);
+    ctx.lineTo(x + 12, y);
+    ctx.moveTo(x, y - 12);
+    ctx.lineTo(x, y + 12);
+    ctx.stroke();
   }
 }
 
 function renderWaterfall() {
+  if (!state.waterfallRows.length) {
+    dom.waterfallFeed.innerHTML = `<div class="capability-empty" role="row"><span role="cell">${escapeHtml(t("radar.notConnected", "未接入实时业务队列，不显示模拟流量。"))}</span></div>`;
+    return;
+  }
   dom.waterfallFeed.innerHTML = state.waterfallRows.map((row) => {
     const high = row.decision === "HOLD";
     const decisionClass = high ? "risk" : row.decision === "REVIEW" ? "caution" : "credible";
@@ -960,38 +897,15 @@ function renderWaterfall() {
         <span role="cell">${escapeHtml(row.ingress)}</span>
         <span role="cell">${escapeHtml(row.asset)}</span>
         <span role="cell" class="${decisionClass}"><i class="state-block ${decisionClass}"></i> ${escapeHtml(row.decision)}</span>
-        ${high
-          ? `<button type="button" data-intercept-case="geopolitical">${escapeHtml(t("case.open", "提取案宗"))}</button>`
-          : `<span role="cell">${escapeHtml(row.route)}</span>`}
+        <span role="cell">${escapeHtml(row.route)}</span>
       </div>
     `;
   }).join("");
-  dom.waterfallFeed.querySelectorAll("[data-intercept-case]").forEach((button) => {
-    button.addEventListener("click", () => loadSampleCase(button.dataset.interceptCase));
-  });
 }
 
 function startRadarFeed() {
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  window.setInterval(() => {
-    state.waterfallRows.forEach((row) => { row.fresh = false; });
-    const high = Math.random() > 0.82;
-    const review = !high && Math.random() > 0.72;
-    const now = new Date();
-    state.waterfallRows.unshift({
-      id: `live-${now.getTime()}`,
-      time: now.toISOString().slice(11, 19),
-      ingress: ["NEWSROOM-API", "PLATFORM-TNS", "BRAND-WATCH", "WIRE-DESK"][Math.floor(Math.random() * 4)],
-      asset: `ASSET-${Math.floor(1000 + Math.random() * 8999)}.JPG`,
-      decision: high ? "HOLD" : review ? "REVIEW" : "ALLOW",
-      route: high ? "DOSSIER" : review ? "HUMAN" : "AUTO",
-      fresh: high
-    });
-    state.waterfallRows = state.waterfallRows.slice(0, 18);
-    dom.intakeRate.textContent = `${Math.floor(172 + Math.random() * 28)}/min`;
-    dom.queueCount.textContent = String(sampleCases.length).padStart(2, "0");
-    renderWaterfall();
-  }, 5200);
+  dom.intakeRate.textContent = "—";
+  dom.queueCount.textContent = "00";
 }
 
 function startQuarantineCountdowns() {
@@ -1089,8 +1003,9 @@ function reportText(payload = state.activePayload) {
   return [
     `${t("report.title", "ShareGuard影像鉴真报告")} / CASE #${state.activeCase.code}`,
     `${t("report.decisionLabel", "处置结论")}：${decisionLabel(payload.decision)}`,
-    `${t("report.riskLabel", "AI生成风险")}：${formatPercent(payload.probability_ai_generated)}`,
-    `${t("report.confidenceLabel", "系统置信度")}：${formatPercent(payload.confidence)}`,
+    `${t("report.scoreLabel", "AI生成模型分数")}：${formatModelScore(payload.model_score)}`,
+    `${t("report.marginLabel", "决策余量")}：${formatModelScore(payload.decision_margin)}`,
+    `${t("report.scoreNoticeLabel", "分数说明")}：${payload.score_notice}`,
     `${t("report.actionLabel", "建议动作")}：${payload.report.recommended_action}`,
     `${t("report.testimonyLabel", "机器证词")}：${payload.report.summary}`,
     `${t("report.statementLabel", "声明")}：${payload.report.disclaimer}`
@@ -1098,9 +1013,12 @@ function reportText(payload = state.activePayload) {
 }
 
 function buildReportHtml(payload = state.activePayload) {
-  const report = payload || normalizePayload(awaitableStaticPayload());
+  if (!payload) throw new Error("NO LIVE MODEL RESULT");
+  const report = payload;
   const sections = report.report.sections.map((section) => `
-    <section><h2>${escapeHtml(section.title || "记录")}</h2><p>${escapeHtml(section.body || "-")}</p></section>
+    <section><h2>${escapeHtml(section.title || "记录")}</h2>${Array.isArray(section.items)
+      ? `<ul>${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      : `<p>${escapeHtml(section.body || "-")}</p>`}</section>
   `).join("");
   return `<!doctype html>
 <html lang="${escapeHtml(i18n?.getLocale() || "zh-CN")}"><head><meta charset="utf-8"><title>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</title>
@@ -1134,8 +1052,12 @@ function downloadJsonReport() {
     case_id: state.activeCase.code,
     generated_at: new Date().toISOString(),
     decision: state.activePayload?.decision,
-    ai_probability: state.activePayload?.probability_ai_generated,
-    confidence: state.activePayload?.confidence,
+    model_score: state.activePayload?.model_score,
+    score_kind: state.activePayload?.score_kind,
+    decision_margin: state.activePayload?.decision_margin,
+    score_notice: state.activePayload?.score_notice,
+    localization: state.activePayload?.localization,
+    provenance: state.activePayload?.provenance,
     report: state.activePayload?.report
   };
   downloadBlob(JSON.stringify(payload, null, 2), `${reportFileStem()}.json`, "application/json");
@@ -1346,7 +1268,7 @@ async function connectPrivateModel(event) {
       "error",
       error instanceof ModelConnectionError
         ? error.message
-        : t("model.networkError", "无法连接私有模型网关，请确认演示服务正在运行。")
+        : t("model.networkError", "无法连接私有模型网关，请确认私有服务正在运行。")
     );
     renderModelConnectionState();
     dom.modelPassword.focus();
@@ -1491,16 +1413,23 @@ async function createEvidencePackage(payload = state.activePayload) {
     decision: {
       action: payload.decision,
       label: decisionLabel(payload.decision),
-      ai_probability: payload.probability_ai_generated,
-      confidence: payload.confidence,
+      model_score: payload.model_score,
+      score_kind: payload.score_kind,
+      decision_margin: payload.decision_margin,
+      score_notice: payload.score_notice,
       uncertainty: payload.uncertainty,
+      reliability: payload.reliability,
       narrative: payload.report.summary,
       recommended_action: payload.report.recommended_action
     },
-    provenance: state.propagationViews.map((view, index) => ({
+    localization: payload.localization,
+    provenance: payload.provenance,
+    robustness_views: state.propagationViews.filter((view) => view.origin === "generated_from_upload").map((view, index) => ({
       order: index + 1,
       label: view.label,
-      dimensions: view.size
+      dimensions: view.size,
+      origin: "generated_from_upload",
+      observed: false
     })),
     custody: state.custodyEvents.map((event) => ({ ...event })),
     sealed_at: new Date().toISOString(),
@@ -1541,7 +1470,8 @@ async function createEvidencePackage(payload = state.activePayload) {
 
 async function mediaBlobForSeal() {
   if (state.currentFile instanceof Blob) return state.currentFile;
-  return dataUrlToBlob(state.currentDataUrl || await loadFlagshipImageDataUrl());
+  if (!state.currentDataUrl) throw new Error("NO UPLOADED MEDIA");
+  return dataUrlToBlob(state.currentDataUrl);
 }
 
 function runCryptoWorker({ manifest, mediaBuffer, mimeType, embedMedia }) {
@@ -1670,32 +1600,6 @@ function bytesToDataUrl(bytes, mimeType) {
   return `data:${mimeType};base64,${btoa(chunks.join(""))}`;
 }
 
-async function loadFlagshipImageDataUrl() {
-  if (!assetDataUrlPromise) {
-    assetDataUrlPromise = fetch("assets/flagship-event.jpg", { cache: "force-cache" })
-      .then((response) => {
-        if (!response.ok) throw new Error("flagship asset unavailable");
-        return response.blob();
-      })
-      .then(blobToDataUrl)
-      .catch(() => "assets/flagship-event.jpg");
-  }
-  return assetDataUrlPromise;
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(String(reader.result || "")));
-    reader.addEventListener("error", () => reject(new Error("影像读取失败")));
-    reader.readAsDataURL(blob);
-  });
-}
-
-function fileToDataUrl(file) {
-  return blobToDataUrl(file);
-}
-
 function releaseCurrentObjectUrl() {
   if (!state.currentObjectUrl) return;
   URL.revokeObjectURL(state.currentObjectUrl);
@@ -1753,28 +1657,41 @@ function localizeUncertainty(value) {
   return t("uncertainty.medium", "中等");
 }
 
+function localizeBoundaryState(value, reliability = null) {
+  if (
+    reliability?.status === "inconsistent"
+    || reliability?.reason === "spatial_score_inconsistency"
+  ) {
+    return t("reliability.spatialInconsistent", "局部复核不一致");
+  }
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["low", "低"].includes(normalized)) return t("boundary.far", "远离阈值");
+  if (["high", "高"].includes(normalized)) return t("boundary.near", "高度接近阈值");
+  if (["medium", "中", "中等"].includes(normalized)) return t("boundary.middle", "接近阈值");
+  return t("boundary.unknown", "未提供");
+}
+
 async function refreshLocalizedView() {
   renderCasePicker();
   renderCaseContext(state.activeCase);
-  if (state.activePayload?.backend === "static-demo") {
-    const activeViewIndex = state.activeViewIndex;
-    setAnalysisPayload(await buildStaticDemoPayload({ caseItem: state.activeCase }));
-    selectEvidenceView(Math.min(activeViewIndex, state.propagationViews.length - 1), { record: false });
-  } else if (state.activePayload) {
+  if (state.activePayload) {
     renderDecision(state.activePayload);
     renderReviewer(state.activePayload);
+    renderAnnotations();
+    renderProvenance();
   }
   if (usesRemoteModel()) {
     renderModelConnectionState();
   } else {
-    dom.engineLabel.textContent = state.activePayload?.backend && state.activePayload.backend !== "static-demo"
+    dom.engineLabel.textContent = state.activePayload?.backend
       ? t("engine.private", "私有模型服务已连接，仅返回产品级结论")
-      : t("engine.demo", "产品演示模式，当前结果仅展示工作流");
+      : t("engine.unavailable", "真实模型未连接，未生成鉴真结论");
   }
 }
 
-function formatPercent(value) {
-  return `${Math.round(clamp(Number(value), 0, 1) * 100)}%`;
+function formatModelScore(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${clamp(numeric, 0, 1).toFixed(3)} / 1.000` : "—";
 }
 
 function formatBytes(bytes) {
@@ -1813,18 +1730,6 @@ function escapeHtml(value) {
     "'": "&#39;",
     "\"": "&quot;"
   })[character]);
-}
-
-function awaitableStaticPayload() {
-  return {
-    probability_ai_generated: state.activeCase.probability,
-    confidence: state.activeCase.confidence,
-    decision: state.activeCase.decision,
-    uncertainty: state.activeCase.uncertainty,
-    report: buildStaticReport(state.activeCase),
-    propagation_views: state.propagationViews,
-    file_name: state.currentFile?.name || "flagship-event.jpg"
-  };
 }
 
 document.addEventListener("DOMContentLoaded", init);

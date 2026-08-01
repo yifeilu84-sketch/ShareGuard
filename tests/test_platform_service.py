@@ -93,6 +93,44 @@ class PlatformServiceTests(unittest.TestCase):
         self.assertEqual(outcome.public_payload["decision"], "review")
         self.assertEqual(outcome.public_payload["uncertainty"], "high")
 
+    def test_spatially_inconsistent_high_score_requires_review(self):
+        class SpatiallyInconsistentBackend(FakeBackend):
+            def analyze(self, image, filename="image"):
+                result = super().analyze(image, filename=filename)
+                result.raw.update({
+                    "spatial_recheck_performed": True,
+                    "selective_review": True,
+                    "reliability_reason": "spatial_score_inconsistency",
+                })
+                return result
+
+        service = AnalysisService(
+            SpatiallyInconsistentBackend(
+                probability=0.9999,
+                confidence=0.999,
+                risk_level="high",
+            ),
+            PlatformConfig(public_score_decimals=3),
+        )
+
+        outcome = service.analyze(
+            image_bytes(size=(40, 30)),
+            "camera-photo.png",
+            "sg_req_spatial_review",
+        )
+
+        self.assertEqual(outcome.public_payload["decision"], "review")
+        self.assertEqual(outcome.public_payload["uncertainty"], "high")
+        self.assertEqual(outcome.public_payload["reliability"], {
+            "performed": True,
+            "status": "inconsistent",
+            "reason": "spatial_score_inconsistency",
+        })
+        self.assertIn("空间", outcome.public_payload["recommended_action"])
+        serialized = json.dumps(outcome.public_payload, ensure_ascii=False)
+        self.assertNotIn("group_scores", serialized)
+        self.assertNotIn("threshold", serialized)
+
     def test_public_and_legacy_payloads_hide_private_parameters(self):
         service = AnalysisService(FakeBackend(), PlatformConfig())
 
@@ -126,6 +164,32 @@ class PlatformServiceTests(unittest.TestCase):
         self.assertEqual(outcome.public_payload["ai_probability"], 0.73)
         self.assertEqual(outcome.public_payload["confidence"], 0.61)
         self.assertEqual(outcome.public_payload["propagation_views"], [])
+
+    def test_public_contract_names_scores_and_unavailable_capabilities_honestly(self):
+        service = AnalysisService(
+            FakeBackend(probability=0.9988, confidence=0.9971, risk_level="high"),
+            PlatformConfig(public_score_decimals=3),
+        )
+
+        outcome = service.analyze(image_bytes(), "camera-photo.png", "sg_req_honest")
+        payload = outcome.public_payload
+
+        self.assertEqual(payload["model_score"], 0.999)
+        self.assertEqual(payload["score_kind"], "uncalibrated_ai_generation_score")
+        self.assertEqual(payload["decision_margin"], 0.997)
+        self.assertEqual(payload["localization"], {
+            "available": False,
+            "annotations": [],
+            "reason": "image_level_model",
+        })
+        self.assertEqual(payload["provenance"], {
+            "available": False,
+            "hops": [],
+            "reason": "source_data_not_provided",
+        })
+        self.assertIn("未经概率校准", payload["score_notice"])
+        self.assertNotIn("AI生成概率", json.dumps(payload["report"], ensure_ascii=False))
+        self.assertNotIn("真实传播链路", json.dumps(payload["report"], ensure_ascii=False))
 
     def test_rejects_image_over_pixel_limit_before_inference(self):
         backend = FakeBackend()

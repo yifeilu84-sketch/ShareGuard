@@ -9,7 +9,7 @@ from uuid import uuid4
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 
-PROPAGATION_VIEW_LABELS = {
+ROBUSTNESS_VIEW_LABELS = {
     "jpeg_q50": "JPEG压缩",
     "resize_384": "缩放转发",
     "screenshot_like": "截图传播",
@@ -19,7 +19,7 @@ PROPAGATION_VIEW_LABELS = {
 
 
 def make_propagation_views(image: Image.Image) -> List[Dict[str, Any]]:
-    """Build lightweight visual previews of common real-sharing degradations."""
+    """Build synthetic robustness previews derived from the uploaded image."""
 
     rgb = image.convert("RGB")
     views = [
@@ -32,10 +32,12 @@ def make_propagation_views(image: Image.Image) -> List[Dict[str, Any]]:
     return [
         {
             "id": view_id,
-            "label": PROPAGATION_VIEW_LABELS[view_id],
+            "label": ROBUSTNESS_VIEW_LABELS[view_id],
             "width": int(view.width),
             "height": int(view.height),
             "image_data_url": _image_data_url(view),
+            "origin": "generated_from_upload",
+            "observed": False,
         }
         for view_id, view in views
     ]
@@ -44,8 +46,8 @@ def make_propagation_views(image: Image.Image) -> List[Dict[str, Any]]:
 def build_authenticity_report(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Translate detector output into a concise product report."""
 
-    probability = float(payload.get("probability_ai_generated", 0.0))
-    confidence = float(payload.get("confidence", 0.0))
+    model_score = float(payload.get("probability_ai_generated", 0.0))
+    decision_margin = float(payload.get("confidence", 0.0))
     risk_level = payload.get("risk_level", "uncertain")
     label = payload.get("label", "real")
     now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -55,24 +57,30 @@ def build_authenticity_report(payload: Dict[str, Any]) -> Dict[str, Any]:
     width = image_info.get("width")
     height = image_info.get("height")
     image_size = f"{width}x{height}" if width and height else "-"
-    propagation_count = len(payload.get("propagation_views") or [])
+    robustness_count = len(payload.get("propagation_views") or [])
+    reliability = payload.get("reliability") or {}
+    spatially_inconsistent = reliability.get("status") == "inconsistent"
 
-    if risk_level == "uncertain" or confidence < 0.2:
+    if spatially_inconsistent:
+        conclusion = "模型空间信号不一致"
+        action = "整图与局部复核信号冲突，必须核验原始文件、来源与拍摄上下文后再作决定。"
+        uncertainty = "高"
+    elif risk_level == "uncertain" or decision_margin < 0.2:
         conclusion = "需人工复核"
         action = "模型置信度较低，建议结合来源、上下文和人工审核后再使用。"
         uncertainty = "高"
     elif label == "ai_generated":
         conclusion = "疑似AI生成"
         action = "建议暂缓公开使用，进入人工复核或进一步取证流程。"
-        uncertainty = "低" if confidence >= 0.6 else "中"
+        uncertainty = "低" if decision_margin >= 0.6 else "中"
     else:
         conclusion = "倾向真实"
         action = "可作为低风险样本进入后续流程，但仍建议保留来源记录。"
-        uncertainty = "低" if confidence >= 0.6 else "中"
+        uncertainty = "低" if decision_margin >= 0.6 else "中"
 
     return {
         "product": "ShareGuard影像鉴真",
-        "report_type": "真实传播链路鉴真报告",
+        "report_type": "影像鉴真辅助报告",
         "report_id": report_id,
         "generated_at": generated_at,
         "subject": {
@@ -82,24 +90,33 @@ def build_authenticity_report(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "conclusion": conclusion,
         "risk_level": risk_level,
-        "ai_probability": probability,
-        "confidence": confidence,
+        "model_score": model_score,
+        "score_kind": "uncalibrated_ai_generation_score",
+        "decision_margin": decision_margin,
         "uncertainty": uncertainty,
+        "score_notice": "模型分数未经概率校准，不代表图像为AI生成的事实概率。",
         "recommended_action": action,
         "sections": [
             {
                 "title": "检测结论",
                 "items": [
                     f"综合结论：{conclusion}",
-                    f"AI生成概率：{probability * 100:.1f}%",
+                    f"AI生成模型分数：{model_score:.3f}（0至1）",
+                    f"决策余量：{decision_margin:.3f}",
                     f"风险等级：{risk_level}",
+                    *(
+                        ["空间一致性复核：不一致，系统已禁止自动暂缓或放行。"]
+                        if spatially_inconsistent
+                        else []
+                    ),
+                    "模型分数未经概率校准，不代表图像为AI生成的事实概率。",
                 ],
             },
             {
-                "title": "传播链路证据",
+                "title": "鲁棒性复核视图",
                 "items": [
-                    f"已生成{propagation_count}种传播退化视图用于对照复核。",
-                    "覆盖JPEG压缩、缩放转发、截图传播、重度分享和图文拼贴等常见场景。",
+                    f"已由本次上传影像生成{robustness_count}种退化视图用于人工对照。",
+                    "这些视图是系统生成的测试副本，不代表已识别到真实传播路径。",
                 ],
             },
             {
@@ -112,13 +129,18 @@ def build_authenticity_report(payload: Dict[str, Any]) -> Dict[str, Any]:
         ],
         "export_highlights": [
             "单图鉴真结论可直接复制给审核、媒体或风控人员。",
-            "传播链路视图可作为客户演示和人工复核证据。",
+            "上传影像衍生的鲁棒性视图可辅助人工复核。",
             "报告编号和生成时间便于平台归档与后续追踪。",
         ],
         "review_notes": [
-            "系统面向压缩、截图、转发和二次编辑后的真实传播图像。",
-            "风险等级由模型分数、置信度和不确定性共同决定。",
-            "建议保留原始来源、上传时间和人工复核记录。",
+            *(
+                ["整图与局部复核信号不一致，本次结果已强制进入人工复核。"]
+                if spatially_inconsistent
+                else []
+            ),
+            "本次结果为图像级判定，当前模型未返回像素级定位。",
+            "未接入可信来源或传播链路数据，无法生成真实溯源拓扑。",
+            "模型分数未经概率校准，应结合来源、上下文与人工复核解释。",
         ],
         "disclaimer": "本报告为技术辅助鉴真结果，不替代司法鉴定或最终法律结论。",
     }

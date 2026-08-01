@@ -40,7 +40,7 @@
       <div class="command-actions">
         <div class="engine-state">
           <span class="state-block credible" aria-hidden="true"></span>
-          <span id="engineLabel" data-i18n="engine.demo">产品演示模式，当前结果仅展示工作流</span>
+          <span id="engineLabel">等待私有模型授权，尚未生成结论</span>
         </div>
         <button id="modelConnectionButton" class="model-connection-button" type="button" aria-haspopup="dialog" aria-controls="modelConnectionDialog">
           <span class="model-connection-indicator" aria-hidden="true"></span>
@@ -54,14 +54,14 @@
 
     <section class="threat-strip" aria-label="全局威胁态势" data-i18n-aria-label="threat.aria">
       <div class="threat-copy">
-        <span>GLOBAL THREAT LEVEL:</span>
-        <strong>[ ELEVATED / DISINFORMATION CLUSTER ]</strong>
+        <span>INFERENCE STATUS:</span>
+        <strong>[ PRIVATE MODEL / LIVE RESULTS ONLY ]</strong>
       </div>
       <canvas id="throughputCanvas" width="320" height="24" aria-label="实时处理吞吐量" data-i18n-aria-label="throughput.aria"></canvas>
       <div class="threat-meta">
-        <span>INTAKE <b id="intakeRate">184/min</b></span>
-        <span>QUEUE <b id="queueCount">03</b></span>
-        <time id="systemClock" datetime="2026-07-11T14:28:20Z">14:28:20 UTC</time>
+        <span>INTAKE <b id="intakeRate">—</b></span>
+        <span>QUEUE <b id="queueCount">00</b></span>
+        <time id="systemClock">--:--:-- UTC</time>
       </div>
     </section>
 
@@ -97,7 +97,7 @@
               <span>QUARANTINE / HUMAN GATE</span>
               <h2 id="quarantineTitle" data-i18n="radar.quarantine">隔离挂起区</h2>
             </div>
-            <output id="quarantineCount">03</output>
+          <output id="quarantineCount">00</output>
           </header>
           <div id="casePicker" class="quarantine-stack"></div>
         </aside>
@@ -107,106 +107,88 @@
         <section class="evidence-column">
           <header class="dossier-register">
             <div class="case-identity">
-              <span id="stageCaseCode">CASE #SG-202607-44B</span>
-              <h1 id="dossierTitle" data-i18n="dossier.title">突发影像发布前核验</h1>
+              <span id="stageCaseCode">CASE #PENDING</span>
+              <h1 id="dossierTitle">用户导入影像核验</h1>
             </div>
             <dl class="case-metadata">
-              <div><dt>TIMESTAMP</dt><dd id="caseTimestamp">2026-07-11 14:28:20 UTC</dd></div>
-              <div><dt>SOURCE</dt><dd id="caseSource">ANONYMOUS TELEGRAM RELAY</dd></div>
-              <div><dt>HANDLER</dt><dd id="caseHandler">DESK-EDITOR / HKG-04</dd></div>
+              <div><dt>TIMESTAMP</dt><dd id="caseTimestamp">—</dd></div>
+              <div><dt>SOURCE</dt><dd id="caseSource">USER UPLOAD</dd></div>
+              <div><dt>HANDLER</dt><dd id="caseHandler">CURRENT SESSION</dd></div>
             </dl>
           </header>
 
           <div id="caseContext" class="event-briefing">
             <span>EVENT BRIEFING</span>
-            <p data-i18n="dossier.briefing">匿名频道发布的突发现场影像正在跨平台传播，编辑部面临即时发布压力，原始 EXIF 与可信来源尚未取得。</p>
+            <p>导入 JPEG、PNG 或 WebP 影像后，系统将调用私有模型生成本次文件的图像级判定。</p>
           </div>
 
           <div id="evidenceViewport" class="evidence-viewport" tabindex="0" aria-label="影像证据透写台" data-i18n-aria-label="evidence.viewport" data-lens-locked="false">
-            <img id="processedImage" src="assets/flagship-event.jpg" alt="经社交平台有损压缩的待核验影像" data-i18n-alt="evidence.processedAlt">
-            <div id="originalLayer" class="original-layer" aria-hidden="true">
-              <img id="previewImage" src="assets/flagship-event.jpg" alt="">
+            <div id="emptyEvidenceState" class="empty-evidence-state">
+              <strong>AWAITING IMAGE</strong>
+              <span>导入影像以启动真实模型分析</span>
+            </div>
+            <img id="processedImage" alt="当前待核验影像" hidden>
+            <div id="originalLayer" class="original-layer" aria-hidden="true" hidden>
+              <img id="previewImage" alt="">
             </div>
             <canvas id="forensicCanvas" aria-hidden="true"></canvas>
             <div id="forensicLens" class="forensic-lens" hidden aria-hidden="true"></div>
-            <div class="split-indicator" aria-hidden="true"><span></span></div>
+            <div id="splitIndicator" class="split-indicator" aria-hidden="true" hidden><span></span></div>
 
-            <button class="annotation-point annotation-a" type="button" data-annotation="plate" aria-label="查看文字结构异常" data-i18n-aria-label="evidence.annotationText">
-              <span class="annotation-index">A1</span>
-              <span class="annotation-leader" aria-hidden="true"></span>
-              <span class="annotation-copy"><b>TYPOGRAPHICAL HALLUCINATION</b><small data-i18n="evidence.annotationTextDetail">字符结构不符合自然语言分布</small></span>
-            </button>
-            <button class="annotation-point annotation-b" type="button" data-annotation="shadow" aria-label="查看光影方向异常" data-i18n-aria-label="evidence.annotationLight">
-              <span class="annotation-index">A2</span>
-              <span class="annotation-leader" aria-hidden="true"></span>
-              <span class="annotation-copy"><b>CONTRADICTORY RAY PATH</b><small data-i18n="evidence.annotationLightDetail">主体阴影与场景光源方向冲突</small></span>
-            </button>
+            <div id="annotationLayer" class="annotation-layer" aria-live="polite"></div>
 
             <div class="image-register">
-              <span>CURRENT VIEW / <b id="stageViewLabel">CURRENT ASSET</b></span>
-              <span id="stageStatusLabel" data-i18n="evidence.chainReady">传播链路已识别</span>
+              <span>CURRENT VIEW / <b id="stageViewLabel">NO ASSET</b></span>
+              <span id="stageStatusLabel">尚未导入影像</span>
             </div>
           </div>
 
-          <div class="comparison-control">
-            <span>LOSSY SOCIAL CAPTURE</span>
-            <label for="compareRange" data-i18n="evidence.compare">洗印显影对比</label>
-            <input id="compareRange" type="range" min="8" max="92" value="52" aria-label="对比有损传播版本与当前影像" data-i18n-aria-label="evidence.compareAria">
-            <span>RECONSTRUCTED SOURCE</span>
+          <div id="comparisonControl" class="comparison-control" hidden>
+            <span>GENERATED ROBUSTNESS VIEW</span>
+            <label for="compareRange">本图衍生视图对比</label>
+            <input id="compareRange" type="range" min="8" max="92" value="52" aria-label="对比本次上传影像与系统生成的鲁棒性视图" disabled>
+            <span>UPLOADED IMAGE</span>
           </div>
 
-          <div id="viewGrid" class="evidence-versions" aria-label="传播版本切换" data-i18n-aria-label="evidence.versionsAria"></div>
-          <p id="fileMeta" class="file-meta" aria-live="polite">FLAGSHIP-EVENT.JPG / 800 × 1200 / STATIC DEMONSTRATION</p>
+          <div id="viewGrid" class="evidence-versions" aria-label="本图衍生鲁棒性视图"></div>
+          <p id="fileMeta" class="file-meta" aria-live="polite">尚未导入影像</p>
         </section>
 
         <aside id="decisionPanel" class="decision-panel" aria-labelledby="decisionTitle">
           <header class="decision-register">
             <span>EDITORIAL VERDICT / HUMAN AUTHORITY REQUIRED</span>
-            <span id="decisionTimestamp">14:28:20 UTC</span>
+            <span id="decisionTimestamp">—</span>
           </header>
 
           <div class="verdict-block">
-            <span>ACTION REQUIRED</span>
-            <h2 id="decisionTitle">SUSPEND<br><em>暂缓发布</em></h2>
+            <span>LIVE MODEL RESULT</span>
+            <h2 id="decisionTitle">NO RESULT<br><em>尚无结论</em></h2>
           </div>
 
           <dl class="risk-register">
-            <div><dt data-i18n="decision.risk">AI生成风险</dt><dd id="riskProbability">87%</dd></div>
-            <div><dt data-i18n="decision.confidence">系统置信度</dt><dd id="confidenceValue">81%</dd></div>
-            <div><dt data-i18n="decision.uncertainty">不确定性</dt><dd id="uncertaintyValue">中等</dd></div>
-            <div><dt data-i18n="decision.action">建议动作</dt><dd id="recommendedAction">取得原始素材并转交人工复核</dd></div>
+            <div><dt data-i18n="decision.score">AI生成模型分数</dt><dd id="riskProbability">—</dd></div>
+            <div><dt data-i18n="decision.margin">决策余量</dt><dd id="confidenceValue">—</dd></div>
+            <div><dt data-i18n="decision.boundary">边界状态</dt><dd id="uncertaintyValue">—</dd></div>
+            <div><dt data-i18n="decision.action">建议动作</dt><dd id="recommendedAction">等待真实模型结果</dd></div>
           </dl>
 
           <section class="machine-testimony" aria-labelledby="testimonyTitle">
             <h3 id="testimonyTitle" data-i18n="decision.testimony">机器证词</h3>
-            <p id="machineNarrative">系统在多次传播退化后仍检测到稳定的生成性痕迹。画面中的文字结构和环境光向存在相互独立的异常信号。</p>
-            <ol id="evidenceList">
-              <li>疑似文字幻觉在压缩版本中持续存在。</li>
-              <li>主体边缘与背景景深过渡不一致。</li>
-              <li>缺失可核验的原始 EXIF 数据。</li>
-            </ol>
+            <p id="machineNarrative">尚未调用模型。正式站不会使用样例证词补全真实结果。</p>
+            <ol id="evidenceList"></ol>
           </section>
 
           <section class="provenance-map" aria-labelledby="provenanceTitle">
             <div class="subsection-heading">
               <h3 id="provenanceTitle" data-i18n="decision.provenance">溯源拓扑</h3>
-              <span>3 HOPS / LOSSY</span>
+              <span id="provenanceStatus">NO SOURCE DATA</span>
             </div>
-            <svg viewBox="0 0 360 132" role="img" aria-label="Telegram、社交平台与当前待审版本的传播路径" data-i18n-aria-label="provenance.aria">
-              <path d="M28 28 C104 28 96 66 180 66 S256 104 332 104" fill="none" stroke="currentColor" stroke-width="1"/>
-              <path d="M180 66 C228 66 246 32 318 32" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="4 4"/>
-              <rect x="20" y="20" width="16" height="16" fill="currentColor"/>
-              <rect x="172" y="58" width="16" height="16" fill="currentColor"/>
-              <rect x="324" y="96" width="16" height="16" fill="currentColor"/>
-              <text x="20" y="55">TELEGRAM / 12:05</text>
-              <text x="136" y="92">X RELAY / 12:30</text>
-              <text x="236" y="125">DESK ASSET / 14:22</text>
-            </svg>
+            <div id="provenanceBody" class="capability-empty">未提供来源或传播链路数据，系统不会生成虚构拓扑。</div>
           </section>
 
           <div class="decision-actions">
-            <button id="forceReleaseButton" class="button secondary" type="button" data-i18n="decision.force">强制放行</button>
-            <button id="sealButton" class="button primary" type="button" data-i18n="decision.seal">签封并导出</button>
+            <button id="forceReleaseButton" class="button secondary" type="button" data-i18n="decision.force" disabled>强制放行</button>
+            <button id="sealButton" class="button primary" type="button" data-i18n="decision.seal" disabled>签封并导出</button>
           </div>
 
           <div class="report-actions" aria-label="报告操作" data-i18n-aria-label="report.actionsAria">
@@ -237,11 +219,11 @@
           </div>
           <aside class="custody-summary">
             <span>ACTIVE DOSSIER</span>
-            <strong id="custodyCaseCode">SG-202607-44B</strong>
+            <strong id="custodyCaseCode">PENDING</strong>
             <dl>
-              <div><dt>MEDIA</dt><dd id="custodyFile">flagship-event.jpg</dd></div>
-              <div><dt>DECISION</dt><dd id="custodyDecision">SUSPEND</dd></div>
-              <div><dt>EVENTS</dt><dd id="custodyEvents">05</dd></div>
+              <div><dt>MEDIA</dt><dd id="custodyFile">—</dd></div>
+              <div><dt>DECISION</dt><dd id="custodyDecision">NO RESULT</dd></div>
+              <div><dt>EVENTS</dt><dd id="custodyEvents">00</dd></div>
               <div><dt>LAST SEAL</dt><dd id="custodySeal">NOT SEALED</dd></div>
             </dl>
           </aside>
@@ -252,19 +234,19 @@
         <header class="reviewer-header">
           <div>
             <span>CONTROLLED REVIEWER VIEW</span>
-            <h1 id="reviewerTitle">CASE #SG-202607-44B</h1>
+            <h1 id="reviewerTitle">CASE #PENDING</h1>
           </div>
           <button type="button" data-view="dossier" data-i18n="review.back">返回案宗</button>
         </header>
         <div class="reviewer-layout">
           <figure>
-            <img id="reviewerImage" src="assets/flagship-event.jpg" alt="争议影像受控审查版本" data-i18n-alt="review.imageAlt">
+            <img id="reviewerImage" alt="待生成的受控审查版本" hidden>
             <figcaption data-i18n="review.figure">争议影像 / 受控副本 / 不含模型内部参数</figcaption>
           </figure>
           <section class="reviewer-decision">
             <span>EDITORIAL DECISION</span>
-            <h2 id="reviewerVerdict">SUSPEND PUBLICATION</h2>
-            <p id="reviewerNarrative">当前证据不足以支持公开传播。建议取得原始素材并完成法律风险复核。</p>
+            <h2 id="reviewerVerdict">NO MODEL RESULT</h2>
+            <p id="reviewerNarrative">导入影像并取得真实模型结果后，可生成受控审查视图。</p>
             <form id="reviewForm">
               <label for="reviewerComment" data-i18n="review.note">法律或编辑旁注</label>
               <textarea id="reviewerComment" rows="5" maxlength="800" required></textarea>
@@ -278,7 +260,7 @@
 
     <footer class="system-footer">
       <span>SHAREGUARD / PRIVATE MODEL BOUNDARY ACTIVE</span>
-      <span id="footerCase">CASE #SG-202607-44B</span>
+      <span id="footerCase">CASE #PENDING</span>
       <button id="openReviewerButton" type="button" data-i18n="review.open">生成受控审查视图</button>
     </footer>
   </div>

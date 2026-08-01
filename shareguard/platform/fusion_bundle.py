@@ -16,6 +16,10 @@ from .backends import DetectionResult, clamp01, image_info, label_from_probabili
 from .safe_checkpoints import load_safe_checkpoint
 
 
+SPATIAL_RECHECK_TRIGGER = 0.98
+SPATIAL_RECHECK_MIN_GAP = 0.50
+
+
 def load_bundle_manifest(bundle_dir: str | Path) -> Dict[str, Any]:
     root = Path(bundle_dir)
     path = root / "manifest.json"
@@ -73,13 +77,39 @@ class NoisyShareFusionBundleBackend:
 
     def analyze(self, image: Image.Image, filename: str = "image") -> DetectionResult:
         rgb = image.convert("RGB")
-        payload = self._load_predictor().predict(rgb)
+        predictor = self._load_predictor()
+        payload = predictor.predict(rgb)
         self._ready = True
         prob = clamp01(payload.get("probability_ai_generated", payload.get("probability", 0.0)))
         confidence = clamp01(payload.get("confidence", abs(prob - 0.5) * 2.0))
         label = payload.get("label", label_from_probability(prob, self.manifest["threshold"]))
         if label == "fake":
             label = "ai_generated"
+        spatial_recheck_performed = False
+        selective_review = False
+        reliability_reason = "secondary_check_not_required"
+        if prob >= SPATIAL_RECHECK_TRIGGER:
+            spatial_recheck_performed = True
+            threshold = float(self.manifest["threshold"])
+            crop_scores = [
+                clamp01(
+                    predictor.predict(crop).get(
+                        "probability_ai_generated",
+                        0.0,
+                    )
+                )
+                for crop in _spatial_recheck_crops(rgb)
+            ]
+            minimum_crop_score = min(crop_scores, default=prob)
+            selective_review = (
+                minimum_crop_score < threshold
+                and prob - minimum_crop_score >= SPATIAL_RECHECK_MIN_GAP
+            )
+            reliability_reason = (
+                "spatial_score_inconsistency"
+                if selective_review
+                else "spatial_recheck_consistent"
+            )
         return DetectionResult(
             file_name=filename,
             label=label,
@@ -96,8 +126,24 @@ class NoisyShareFusionBundleBackend:
             raw={
                 "model_version": self.manifest.get("model_version", "shareguard-private-v1"),
                 "serving_mode": "private-fusion-bundle",
+                "spatial_recheck_performed": spatial_recheck_performed,
+                "selective_review": selective_review,
+                "reliability_reason": reliability_reason,
             },
         )
+
+
+def _spatial_recheck_crops(image: Image.Image):
+    """Return overlapping upper/lower views for conservative score stability checks."""
+
+    width, height = image.size
+    if width < 2 or height < 4:
+        return [image]
+    midpoint = height // 2
+    overlap = max(1, round(height * 0.04))
+    upper = image.crop((0, 0, width, min(height, midpoint + overlap)))
+    lower = image.crop((0, max(0, midpoint - overlap), width, height))
+    return [upper, lower]
 
 
 class FeatureFusionEnsemblePredictor:
