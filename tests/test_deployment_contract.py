@@ -173,6 +173,9 @@ class DeploymentContractTests(unittest.TestCase):
         config = (
             ROOT / "deploy" / "cloudflare-worker" / "wrangler.toml"
         ).read_text(encoding="utf-8")
+        preview_config = (
+            ROOT / "deploy" / "cloudflare-worker" / "wrangler.preview.toml"
+        ).read_text(encoding="utf-8")
 
         for marker in ["cf-access-", "Cache-Control", "no-store", "MODAL_ORIGIN"]:
             self.assertIn(marker, source)
@@ -181,6 +184,15 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn("Basic ", source)
         self.assertNotIn("MODAL_ORIGIN", config)
         self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', config)
+        self.assertIn("workers_dev = false", config)
+        self.assertIn("preview_urls = false", config)
+        self.assertIn('pattern = "api.shareguard.systems/*"', config)
+        self.assertIn('zone_name = "shareguard.systems"', config)
+        self.assertIn('name = "shareguard-api-gateway-preview"', preview_config)
+        self.assertIn("workers_dev = true", preview_config)
+        self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', preview_config)
+        self.assertNotIn("api.shareguard.systems", preview_config)
+        self.assertNotIn("MODAL_ORIGIN", preview_config)
 
 
 if __name__ == "__main__":

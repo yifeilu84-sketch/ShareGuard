@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -9,8 +10,12 @@ from pathlib import Path
 
 from scripts.modal.upload_private_bundle import (
     build_upload_command,
+    modal_cli_environment,
     validate_safe_bundle,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class ModalArtifactTests(unittest.TestCase):
@@ -118,6 +123,33 @@ class ModalArtifactTests(unittest.TestCase):
             ["put", "shareguard-models", "bundle.tar.gz"],
         )
         self.assertEqual(command[-2:], ["bundle.tar.gz", "--force"])
+
+    def test_upload_script_runs_directly_from_repository_root(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "scripts/modal/upload_private_bundle.py",
+                "--help",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--archive", completed.stdout)
+
+    def test_modal_cli_subprocess_forces_utf8_without_mutating_input(self):
+        original = {"PYTHONUTF8": "0", "UNCHANGED": "yes"}
+
+        environment = modal_cli_environment(original)
+
+        self.assertEqual(environment["PYTHONUTF8"], "1")
+        self.assertEqual(environment["PYTHONIOENCODING"], "utf-8")
+        self.assertEqual(environment["UNCHANGED"], "yes")
+        self.assertEqual(original, {"PYTHONUTF8": "0", "UNCHANGED": "yes"})
 
 
 if __name__ == "__main__":

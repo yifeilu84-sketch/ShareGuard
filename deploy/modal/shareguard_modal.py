@@ -8,9 +8,13 @@ import sys
 import modal
 
 
-ROOT = Path(__file__).resolve().parents[2]
+if modal.is_local():
+    ROOT = Path(__file__).resolve().parents[2]
+else:
+    ROOT = Path("/app")
 PORT = 7860
 MODEL_ARCHIVE = "/models/shareguard-noisyshare-fusion-v1-safe.tar.gz"
+CACHE_ROOT = "/shareguard-cache"
 
 MODEL_VOLUME = modal.Volume.from_name(
     "shareguard-models",
@@ -28,8 +32,10 @@ IMAGE = (
         "79c5599719e0b1afdb56ac2d14588b530283752d7ae6ec3c36e18ec9deb8b229"
     )
     .apt_install("libgl1", "libglib2.0-0")
-    .pip_install_from_requirements(str(ROOT / "requirements-platform.txt"))
-    .add_local_dir(str(ROOT / "shareguard"), remote_path="/app/shareguard")
+    .pip_install_from_requirements(
+        str(ROOT / "requirements-platform.txt"),
+        extra_options="--break-system-packages",
+    )
     .workdir("/app")
     .env(
         {
@@ -39,7 +45,6 @@ IMAGE = (
             "SHAREGUARD_BACKEND": "fusion-bundle",
             "SHAREGUARD_HOST": "0.0.0.0",
             "SHAREGUARD_DEVICE": "cuda",
-            "SHAREGUARD_MODEL_CACHE": "/cache/models",
             "SHAREGUARD_MODEL_VERSION": "shareguard-private-v1",
             "SHAREGUARD_ALLOWED_ORIGINS": "https://shareguard.systems",
             "SHAREGUARD_RATE_LIMIT_PER_MINUTE": "3",
@@ -51,16 +56,27 @@ IMAGE = (
             "SHAREGUARD_MAX_INFERENCE_CONCURRENCY": "1",
             "SHAREGUARD_MAX_WAITING_REQUESTS": "8",
             "SHAREGUARD_MAX_HTTP_WORKERS": "16",
-            "XDG_CACHE_HOME": "/cache",
-            "HF_HOME": "/cache/huggingface",
-            "TORCH_HOME": "/cache/torch",
             "BUNDLE": MODEL_ARCHIVE,
             "PORT": str(PORT),
         }
     )
+    .add_local_dir(str(ROOT / "shareguard"), remote_path="/app/shareguard")
 )
 
 app = modal.App("shareguard-private-inference")
+
+
+def runtime_environment():
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "SHAREGUARD_MODEL_CACHE": f"{CACHE_ROOT}/models",
+            "XDG_CACHE_HOME": CACHE_ROOT,
+            "HF_HOME": f"{CACHE_ROOT}/huggingface",
+            "TORCH_HOME": f"{CACHE_ROOT}/torch",
+        }
+    )
+    return environment
 
 
 @app.function(
@@ -71,7 +87,7 @@ app = modal.App("shareguard-private-inference")
     secrets=[RUNTIME_SECRET],
     volumes={
         "/models": MODEL_VOLUME.read_only(),
-        "/cache": CACHE_VOLUME,
+        CACHE_ROOT: CACHE_VOLUME,
     },
     min_containers=0,
     max_containers=1,
@@ -84,5 +100,5 @@ def serve():
     subprocess.Popen(
         [sys.executable, "-m", "shareguard.platform.app"],
         cwd="/app",
-        env=os.environ.copy(),
+        env=runtime_environment(),
     )

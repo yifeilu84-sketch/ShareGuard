@@ -1,21 +1,28 @@
 """Verify and upload a private ShareGuard bundle to a Modal Volume."""
 
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tarfile
 from typing import Iterable
 
-from shareguard.platform.model_artifacts import sha256_file
-
-
 def _validated_digest(value: str) -> str:
     digest = value.strip().lower()
     if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
         raise ValueError("Expected SHA-256 must be 64 hexadecimal characters")
     return digest
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _safe_member_path(name: str) -> PurePosixPath:
@@ -53,7 +60,7 @@ def validate_safe_bundle(path: Path, expected_sha256: str) -> Path:
         raise ValueError("Modal model bundle must be a .tar.gz archive")
 
     expected = _validated_digest(expected_sha256)
-    if sha256_file(archive) != expected:
+    if _sha256_file(archive) != expected:
         raise ValueError("Model bundle SHA-256 mismatch")
 
     with tarfile.open(archive, mode="r:gz") as handle:
@@ -126,6 +133,13 @@ def build_upload_command(
     ]
 
 
+def modal_cli_environment(base=None) -> dict[str, str]:
+    environment = dict(os.environ if base is None else base)
+    environment["PYTHONUTF8"] = "1"
+    environment["PYTHONIOENCODING"] = "utf-8"
+    return environment
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Verify and upload a private ShareGuard serving bundle"
@@ -153,6 +167,7 @@ def main(argv=None) -> int:
             args.remote_name,
         ),
         check=True,
+        env=modal_cli_environment(),
     )
     return 0
 

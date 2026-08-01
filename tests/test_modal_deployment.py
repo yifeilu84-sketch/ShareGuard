@@ -26,13 +26,36 @@ class ModalDeploymentTests(unittest.TestCase):
             "modal.web_server(PORT, startup_timeout=600)",
             text,
         )
+        self.assertIn("if modal.is_local()", text)
+        self.assertIn('ROOT = Path("/app")', text)
 
     def test_modal_adapter_mounts_model_read_only(self):
         text = self.modal_source()
 
         self.assertIn("MODEL_VOLUME.read_only()", text)
         self.assertIn('"/models":', text)
-        self.assertIn('"/cache": CACHE_VOLUME', text)
+        self.assertIn('CACHE_ROOT = "/shareguard-cache"', text)
+        self.assertIn("CACHE_ROOT: CACHE_VOLUME", text)
+        self.assertNotIn('"/cache": CACHE_VOLUME', text)
+        for setting in [
+            '"SHAREGUARD_MODEL_CACHE": f"{CACHE_ROOT}/models"',
+            '"XDG_CACHE_HOME": CACHE_ROOT',
+            '"HF_HOME": f"{CACHE_ROOT}/huggingface"',
+            '"TORCH_HOME": f"{CACHE_ROOT}/torch"',
+        ]:
+            self.assertIn(setting, text)
+
+        image_environment = text[
+            text.index(".env("):text.index(".add_local_dir(")
+        ]
+        for setting in [
+            "SHAREGUARD_MODEL_CACHE",
+            "XDG_CACHE_HOME",
+            "HF_HOME",
+            "TORCH_HOME",
+        ]:
+            self.assertNotIn(setting, image_environment)
+        self.assertIn("env=runtime_environment()", text)
 
     def test_modal_adapter_forces_production_fusion_bundle(self):
         text = self.modal_source()
@@ -49,6 +72,21 @@ class ModalDeploymentTests(unittest.TestCase):
             text,
         )
 
+    def test_modal_image_handles_pep668_registry_base(self):
+        text = self.modal_source()
+
+        self.assertIn(
+            'extra_options="--break-system-packages"',
+            text,
+        )
+
+    def test_local_source_mount_is_the_final_image_operation(self):
+        text = self.modal_source()
+        local_source = text.index(".add_local_dir(")
+
+        self.assertGreater(local_source, text.index(".workdir("))
+        self.assertGreater(local_source, text.index(".env("))
+
     def test_private_modal_files_are_excluded_from_build_context(self):
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -61,7 +99,10 @@ class ModalDeploymentTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertEqual(requirements.strip(), "modal>=1.2,<2")
+        self.assertEqual(
+            set(requirements.splitlines()),
+            {"modal>=1.2,<2", "python-dotenv>=1.0,<2"},
+        )
 
 
 if __name__ == "__main__":

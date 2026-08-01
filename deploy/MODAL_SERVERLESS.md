@@ -127,14 +127,19 @@ npm install --prefix deploy/cloudflare-worker
 npm test --prefix deploy/cloudflare-worker
 Push-Location deploy/cloudflare-worker
 npx wrangler login
-npx wrangler secret put MODAL_ORIGIN
-npx wrangler deploy
+npx wrangler secret put MODAL_ORIGIN --config wrangler.preview.toml
+npx wrangler deploy --config wrangler.preview.toml
 Pop-Location
 ```
 
 在 `wrangler secret put MODAL_ORIGIN` 的交互提示中粘贴 Modal origin。该值作为
 Cloudflare 加密 Secret 保存，不得加入 `wrangler.toml`。把部署返回的
 `workers.dev` origin 临时保存并运行同一验证：
+
+Cloudflare 账户首次发布 Worker 时可能要求注册免费的 `workers.dev` 子域名。
+在 Dashboard 打开 **Workers & Pages** 完成一次初始化后重新部署即可；该步骤不
+购买套餐，也不会修改 `shareguard.systems` 的 DNS。预览使用独立的
+`shareguard-api-gateway-preview` Worker，不会提前接管正式 API 域名。
 
 ```powershell
 $env:WORKER_ORIGIN = Read-Host "Worker HTTPS origin"
@@ -198,13 +203,18 @@ Route 会在到达 Tunnel 前接管请求，因此既不需要公开 Modal origi
 
 ```powershell
 Push-Location deploy/cloudflare-worker
-npx wrangler deploy --route "api.shareguard.systems/*"
+npx wrangler secret put MODAL_ORIGIN
+npx wrangler deploy
 Pop-Location
 
 .\.venv-modal\Scripts\python.exe scripts/modal/verify_cloud_endpoint.py `
   --base-url https://api.shareguard.systems `
   --image shareguard/platform/static/assets/flagship-event.jpg
 ```
+
+正式 `wrangler.toml` 已固定 `api.shareguard.systems/*` 路由，并关闭默认
+`workers.dev` 与部署预览 URL；Modal origin 只存在于 Cloudflare Secret 中。
+原 Named Tunnel 的橙云 DNS 记录继续保留，作为不改 DNS 的回滚入口。
 
 随后在 `https://shareguard.systems` 完成一次浏览器上传，确认页面显示真实判定且
 网络响应没有 `alpha_clip_l`、`group_scores`、`checkpoint`、`model_artifacts`

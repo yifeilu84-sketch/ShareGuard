@@ -26,6 +26,7 @@ class VerificationHandler(BaseHTTPRequestHandler):
             "path": self.path,
             "authorization": self.headers.get("Authorization"),
             "origin": self.headers.get("Origin"),
+            "user_agent": self.headers.get("User-Agent"),
             "filename": self.headers.get("X-File-Name"),
             "body": body,
         })
@@ -114,6 +115,10 @@ class ModalCloudVerifierTests(unittest.TestCase):
         self.assertEqual(records[2]["authorization"], VerificationHandler.expected_auth)
         self.assertTrue(all(
             record["origin"] == "https://shareguard.systems"
+            for record in records
+        ))
+        self.assertTrue(all(
+            record["user_agent"] == "ShareGuard-Cloud-Verifier/1.0"
             for record in records
         ))
         self.assertEqual(records[2]["filename"], "evidence.png")

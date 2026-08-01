@@ -115,7 +115,10 @@ def verify_endpoint(
     if not image_path.is_file():
         raise FileNotFoundError(image_path)
 
-    common_headers = {"Origin": PUBLIC_ORIGIN}
+    common_headers = {
+        "Origin": PUBLIC_ORIGIN,
+        "User-Agent": "ShareGuard-Cloud-Verifier/1.0",
+    }
     unauthenticated = Request(
         f"{base_url}/v1/ready",
         headers=common_headers,
