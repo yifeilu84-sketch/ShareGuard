@@ -73,6 +73,7 @@ wandb/
 # Temporary
 *.tmp
 *.log
+.worktrees/
 .env
 .env.*
 *.env
