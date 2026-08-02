@@ -18,6 +18,7 @@ class ModalDeploymentTests(unittest.TestCase):
         self.assertIn('gpu="T4"', text)
         self.assertIn("min_containers=0", text)
         self.assertIn("max_containers=1", text)
+        self.assertIn("scaledown_window=30,\n", text)
         self.assertIn(
             'modal.Secret.from_name("shareguard-production")',
             text,

@@ -93,7 +93,7 @@ def runtime_environment():
     },
     min_containers=0,
     max_containers=1,
-    scaledown_window=300,
+    scaledown_window=30,
     timeout=900,
 )
 @modal.concurrent(max_inputs=16)

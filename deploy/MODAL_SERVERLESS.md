@@ -238,7 +238,7 @@ function.update_autoscaler(min_containers=0)
 '@ | .\.venv-modal\Scripts\python.exe -
 ```
 
-代码还将 `max_containers=1`、`scaledown_window=300` 固定在部署契约中，避免演示
+代码还将 `max_containers=1`、`scaledown_window=30` 固定在部署契约中，避免演示
 流量意外扩容。重新部署会恢复代码中声明的 autoscaler 设置。
 
 ## 8. 切换固定域名
