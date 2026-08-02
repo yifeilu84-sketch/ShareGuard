@@ -14,6 +14,11 @@ else:
     ROOT = Path("/app")
 PORT = 7860
 MODEL_ARCHIVE = "/models/shareguard-noisyshare-fusion-v1-safe.tar.gz"
+SPAI_CHECKPOINT = "/models/spai-public-v1-b1b1422f.safetensors"
+SPAI_CHECKPOINT_SHA256 = "ac5caaa6457172c53e36acdf665051ff292d2c3906b3911c51ed5db6844c2f87"
+SPAI_SOURCE_DIR = "/opt/spai"
+SPAI_CONFIG = f"{SPAI_SOURCE_DIR}/configs/spai.yaml"
+SPAI_SOURCE_REVISION = "b1b1422f2912594ba2620b311dde5d28a230d04c"
 CACHE_ROOT = "/shareguard-cache"
 
 MODEL_VOLUME = modal.Volume.from_name(
@@ -31,10 +36,24 @@ IMAGE = (
         "pytorch/pytorch:2.12.1-cuda12.6-cudnn9-runtime@sha256:"
         "79c5599719e0b1afdb56ac2d14588b530283752d7ae6ec3c36e18ec9deb8b229"
     )
-    .apt_install("libgl1", "libglib2.0-0")
+    .apt_install("git", "libgl1", "libglib2.0-0")
     .pip_install_from_requirements(
         str(ROOT / "requirements-platform.txt"),
         extra_options="--break-system-packages",
+    )
+    .run_commands(
+        f"git init {SPAI_SOURCE_DIR}",
+        f"git -C {SPAI_SOURCE_DIR} remote add origin https://github.com/kartyg23/spai.git",
+        f"git -C {SPAI_SOURCE_DIR} fetch --depth 1 origin {SPAI_SOURCE_REVISION}",
+        f"git -C {SPAI_SOURCE_DIR} checkout --detach FETCH_HEAD",
+    )
+    .add_local_file(
+        str(ROOT / "deploy" / "modal" / "spai-runtime.patch"),
+        remote_path="/tmp/spai-runtime.patch",
+        copy=True,
+    )
+    .run_commands(
+        f"git -C {SPAI_SOURCE_DIR} apply --unidiff-zero /tmp/spai-runtime.patch",
     )
     .workdir("/app")
     .env(
@@ -42,10 +61,10 @@ IMAGE = (
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONUNBUFFERED": "1",
             "SHAREGUARD_MODE": "production",
-            "SHAREGUARD_BACKEND": "fusion-bundle",
+            "SHAREGUARD_BACKEND": "spai-hybrid",
             "SHAREGUARD_HOST": "0.0.0.0",
             "SHAREGUARD_DEVICE": "cuda",
-            "SHAREGUARD_MODEL_VERSION": "shareguard-private-v1",
+            "SHAREGUARD_MODEL_VERSION": "spai-public-v1",
             "SHAREGUARD_ALLOWED_ORIGINS": "https://shareguard.systems",
             "SHAREGUARD_RATE_LIMIT_PER_MINUTE": "0",
             "SHAREGUARD_DAILY_QUOTA": "0",
@@ -56,6 +75,14 @@ IMAGE = (
             "SHAREGUARD_MAX_INFERENCE_CONCURRENCY": "1",
             "SHAREGUARD_MAX_WAITING_REQUESTS": "8",
             "SHAREGUARD_MAX_HTTP_WORKERS": "16",
+            "SHAREGUARD_SHADOW_SAMPLE_RATE": "0.25",
+            "SPAI_CHECKPOINT": SPAI_CHECKPOINT,
+            "SPAI_CHECKPOINT_SHA256": SPAI_CHECKPOINT_SHA256,
+            "SPAI_SOURCE_DIR": SPAI_SOURCE_DIR,
+            "SPAI_CONFIG": SPAI_CONFIG,
+            "SPAI_SOURCE_REVISION": SPAI_SOURCE_REVISION,
+            "SPAI_MAX_DIMENSION": "2048",
+            "PYTHONPATH": f"{SPAI_SOURCE_DIR}:/app",
             "BUNDLE": MODEL_ARCHIVE,
             "PORT": str(PORT),
         }

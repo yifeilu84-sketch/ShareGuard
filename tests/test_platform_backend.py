@@ -149,7 +149,7 @@ class PlatformBackendTests(unittest.TestCase):
 
         self.assertNotIn("const sampleCases", script)
         self.assertNotIn("function loadSampleCase", script)
-        self.assertIn("PRIVATE MODEL / LIVE RESULTS ONLY", html)
+        self.assertIn("PROTECTED SCREENING / LIVE RESULTS ONLY", html)
         self.assertIn("不显示模拟案件", script)
         self.assertIn("function renderCaseContext", script)
 

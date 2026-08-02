@@ -58,6 +58,27 @@ class BlockingBackend(FakeBackend):
         return super().analyze(image, filename=filename)
 
 
+class PublicScreeningBackend(FakeBackend):
+    name = "spai-public-v1"
+
+    def analyze(self, image, filename="image"):
+        result = super().analyze(image, filename=filename)
+        result.backend = self.name
+        result.raw = {
+            "model_version": "spai-public-v1",
+            "detector_engine": "spai-public-v1",
+            "engine_role": "public_fallback",
+            "decision_layer": "shareguard-dossier-v1",
+            "shadow_evaluation": {
+                "performed": True,
+                "status": "agree",
+                "engine": "shareguard-private-v1",
+                "affects_decision": False,
+            },
+        }
+        return result
+
+
 class PlatformServiceTests(unittest.TestCase):
     def test_medium_risk_becomes_review_decision(self):
         service = AnalysisService(FakeBackend(), PlatformConfig())
@@ -148,9 +169,18 @@ class PlatformServiceTests(unittest.TestCase):
             "private-fake",
         ]:
             self.assertNotIn(secret, serialized)
-        self.assertEqual(outcome.legacy_payload["backend"], "private-model-api")
+        self.assertEqual(outcome.legacy_payload["backend"], "screening-model-api")
         self.assertEqual(outcome.legacy_payload["raw"], {
             "model_version": "private-manifest-version",
+            "detector_engine": "private-manifest-version",
+            "engine_role": "primary",
+            "decision_layer": "shareguard-dossier-v1",
+            "shadow_evaluation": {
+                "performed": False,
+                "status": "disabled",
+                "engine": "shareguard-private-v1",
+                "affects_decision": False,
+            },
         })
 
     def test_public_scores_are_rounded_and_previews_are_not_returned(self):
@@ -190,6 +220,30 @@ class PlatformServiceTests(unittest.TestCase):
         self.assertIn("未经概率校准", payload["score_notice"])
         self.assertNotIn("AI生成概率", json.dumps(payload["report"], ensure_ascii=False))
         self.assertNotIn("真实传播链路", json.dumps(payload["report"], ensure_ascii=False))
+
+    def test_public_contract_discloses_live_engine_and_sanitized_shadow_role(self):
+        service = AnalysisService(PublicScreeningBackend(), PlatformConfig())
+
+        payload = service.analyze(
+            image_bytes(),
+            "case.png",
+            "sg_req_engine_disclosure",
+        ).public_payload
+        serialized = json.dumps(payload, ensure_ascii=False)
+
+        self.assertEqual(payload["platform"], "ShareGuard")
+        self.assertEqual(payload["backend"], "screening-model-api")
+        self.assertEqual(payload["detector_engine"], "spai-public-v1")
+        self.assertEqual(payload["engine_role"], "public_fallback")
+        self.assertEqual(payload["decision_layer"], "shareguard-dossier-v1")
+        self.assertEqual(payload["shadow_evaluation"], {
+            "performed": True,
+            "status": "agree",
+            "engine": "shareguard-private-v1",
+            "affects_decision": False,
+        })
+        self.assertEqual(payload["localization"]["annotations"], [])
+        self.assertNotIn("private_score", serialized)
 
     def test_rejects_image_over_pixel_limit_before_inference(self):
         backend = FakeBackend()

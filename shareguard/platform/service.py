@@ -1,4 +1,4 @@
-"""Product-facing analysis boundary for private model inference."""
+"""Product-facing boundary for authenticated image screening."""
 
 from dataclasses import dataclass
 from io import BytesIO
@@ -13,7 +13,7 @@ from .product import build_authenticity_report, make_propagation_views
 
 
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
-PUBLIC_BACKEND_NAME = "private-model-api"
+PUBLIC_BACKEND_NAME = "screening-model-api"
 DISCLAIMER = "本结果为技术辅助，不替代司法鉴定或最终法律结论。"
 SCORE_NOTICE = "模型分数未经概率校准，不代表图像为AI生成的事实概率。"
 
@@ -180,6 +180,7 @@ class AnalysisService:
         if isinstance(raw, Mapping) and raw.get("model_version"):
             model_version = str(raw["model_version"])
         reliability = _public_reliability(raw)
+        engine_metadata = _public_engine_metadata(raw, model_version)
 
         probability = round(
             max(0.0, min(1.0, float(result.get("probability_ai_generated", 0.0)))),
@@ -203,11 +204,15 @@ class AnalysisService:
                 "format": image_format,
             },
             "evidence": [
-                "私有模型服务已完成分析",
+                "在线筛查引擎已完成图像级分析",
                 "结果已转换为发布风险决策",
             ],
-            "raw": {"model_version": model_version},
+            "raw": {
+                "model_version": model_version,
+                **engine_metadata,
+            },
             "reliability": reliability,
+            **engine_metadata,
         }
         propagation_views = (
             make_propagation_views(image)
@@ -222,7 +227,10 @@ class AnalysisService:
 
         public_payload = {
             "request_id": request_id,
+            "platform": "ShareGuard",
+            "backend": PUBLIC_BACKEND_NAME,
             "model_version": model_version,
+            **engine_metadata,
             "decision": decision.value,
             "decision_label": decision.label,
             "risk_level": safe_result["risk_level"],
@@ -353,4 +361,28 @@ def _public_reliability(raw: Any) -> Dict[str, Any]:
             if performed
             else "secondary_check_not_required"
         ),
+    }
+
+
+def _public_engine_metadata(raw: Any, model_version: str) -> Dict[str, Any]:
+    source = raw if isinstance(raw, Mapping) else {}
+    shadow = source.get("shadow_evaluation")
+    shadow_source = shadow if isinstance(shadow, Mapping) else {}
+    status = str(shadow_source.get("status", "disabled"))
+    if status not in {"agree", "disagree", "unavailable", "not_sampled", "disabled"}:
+        status = "unavailable"
+    return {
+        "detector_engine": str(source.get("detector_engine") or model_version),
+        "engine_role": str(source.get("engine_role") or "primary"),
+        "decision_layer": str(
+            source.get("decision_layer") or "shareguard-dossier-v1"
+        ),
+        "shadow_evaluation": {
+            "performed": shadow_source.get("performed") is True,
+            "status": status,
+            "engine": str(
+                shadow_source.get("engine") or "shareguard-private-v1"
+            ),
+            "affects_decision": False,
+        },
     }

@@ -62,16 +62,22 @@ class ModalDeploymentTests(unittest.TestCase):
         self.assertIn('"SHAREGUARD_RATE_LIMIT_PER_MINUTE": "0"', text)
         self.assertIn('"SHAREGUARD_DAILY_QUOTA": "0"', text)
 
-    def test_modal_adapter_forces_production_fusion_bundle(self):
+    def test_modal_adapter_forces_production_spai_hybrid(self):
         text = self.modal_source()
 
         for setting in [
             '"SHAREGUARD_MODE": "production"',
-            '"SHAREGUARD_BACKEND": "fusion-bundle"',
+            '"SHAREGUARD_BACKEND": "spai-hybrid"',
             '"SHAREGUARD_DEVICE": "cuda"',
+            '"SPAI_CHECKPOINT": SPAI_CHECKPOINT',
+            '"SPAI_SOURCE_DIR": SPAI_SOURCE_DIR',
+            '"SPAI_CONFIG": SPAI_CONFIG',
+            '"SHAREGUARD_SHADOW_SAMPLE_RATE": "0.25"',
             '"BUNDLE": MODEL_ARCHIVE',
         ]:
             self.assertIn(setting, text)
+        self.assertIn("SPAI_CHECKPOINT_SHA256", text)
+        self.assertIn("SPAI_SOURCE_REVISION", text)
         self.assertNotIn(
             "shareguard-noisyshare-fusion-v1-safe.tar.gz.sha256",
             text,

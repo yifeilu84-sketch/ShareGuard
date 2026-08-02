@@ -60,6 +60,8 @@ def build_authenticity_report(payload: Dict[str, Any]) -> Dict[str, Any]:
     robustness_count = len(payload.get("propagation_views") or [])
     reliability = payload.get("reliability") or {}
     spatially_inconsistent = reliability.get("status") == "inconsistent"
+    detector_engine = str(payload.get("detector_engine") or "unknown")
+    decision_layer = str(payload.get("decision_layer") or "shareguard-dossier-v1")
 
     if spatially_inconsistent:
         conclusion = "模型空间信号不一致"
@@ -87,6 +89,8 @@ def build_authenticity_report(payload: Dict[str, Any]) -> Dict[str, Any]:
             "file_name": payload.get("file_name", "upload"),
             "image_size": image_size,
             "backend": payload.get("backend", "unknown"),
+            "detector_engine": detector_engine,
+            "decision_layer": decision_layer,
         },
         "conclusion": conclusion,
         "risk_level": risk_level,
@@ -104,6 +108,8 @@ def build_authenticity_report(payload: Dict[str, Any]) -> Dict[str, Any]:
                     f"AI生成模型分数：{model_score:.3f}（0至1）",
                     f"决策余量：{decision_margin:.3f}",
                     f"风险等级：{risk_level}",
+                    f"在线筛查引擎：{detector_engine}",
+                    f"处置决策层：{decision_layer}",
                     *(
                         ["空间一致性复核：不一致，系统已禁止自动暂缓或放行。"]
                         if spatially_inconsistent

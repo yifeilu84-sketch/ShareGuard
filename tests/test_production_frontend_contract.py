@@ -73,6 +73,24 @@ class ProductionFrontendContractTests(unittest.TestCase):
         self.assertIn("spatial_score_inconsistency", script)
         self.assertIn("reliability.spatialInconsistent", translations)
 
+    def test_production_ui_discloses_spai_screening_and_shareguard_decision_layer(self):
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+        translations = (STATIC / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn("payload.detector_engine", script)
+        self.assertIn("payload.decision_layer", script)
+        self.assertIn("SPAI", translations)
+        self.assertIn("ShareGuard decision layer", translations)
+        for outdated_claim in [
+            "系统将调用私有模型",
+            "正在调用私有模型",
+            "私有模型服务已连接，仅返回产品级结论",
+        ]:
+            self.assertNotIn(outdated_claim, html)
+            self.assertNotIn(outdated_claim, script)
+            self.assertNotIn(outdated_claim, translations)
+
 
 if __name__ == "__main__":
     unittest.main()

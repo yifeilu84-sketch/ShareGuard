@@ -32,6 +32,7 @@ from .model_artifacts import resolve_bundle_path, resolve_checkpoint_path
 from .product import build_authenticity_report, make_propagation_views
 from .rate_limit import MemoryRateLimiter
 from .service import AnalysisError, AnalysisService
+from .spai_backend import HybridDetectorBackend, SpaiDetectorBackend
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -651,6 +652,14 @@ def build_backend(
     bundle_url: Optional[str] = None,
     bundle_cache: Optional[str] = None,
     expected_sha256: Optional[str] = None,
+    spai_checkpoint: Optional[str] = None,
+    spai_source_dir: Optional[str] = None,
+    spai_config: Optional[str] = None,
+    spai_expected_sha256: Optional[str] = None,
+    spai_source_revision: Optional[str] = None,
+    spai_threshold: float = 0.5,
+    spai_max_dimension: int = 2048,
+    shadow_sample_rate: float = 0.0,
 ):
     if name == "mock":
         return MockDetectorBackend()
@@ -674,6 +683,40 @@ def build_backend(
             expected_sha256=expected_sha256,
         )
         return NoisyShareFusionBundleBackend(str(resolved), device=device)
+    if name in {"spai", "spai-hybrid"}:
+        if not spai_source_dir:
+            raise ValueError("--spai-source-dir is required for SPAI backends")
+        resolved_spai = resolve_checkpoint_path(
+            checkpoint=spai_checkpoint,
+            model_url=None,
+            cache_dir=Path(model_cache) if model_cache else None,
+            expected_sha256=spai_expected_sha256,
+        )
+        primary = SpaiDetectorBackend(
+            checkpoint_path=str(resolved_spai),
+            source_dir=spai_source_dir,
+            config_path=spai_config,
+            device=device,
+            threshold=spai_threshold,
+            max_dimension=spai_max_dimension,
+            source_revision=spai_source_revision or "unknown",
+        )
+        if name == "spai":
+            return primary
+        shadow = None
+        if shadow_sample_rate > 0.0:
+            resolved_bundle = resolve_bundle_path(
+                bundle_path=bundle,
+                bundle_url=bundle_url,
+                cache_dir=Path(bundle_cache) if bundle_cache else None,
+                expected_sha256=expected_sha256,
+            )
+            shadow = NoisyShareFusionBundleBackend(str(resolved_bundle), device=device)
+        return HybridDetectorBackend(
+            primary=primary,
+            shadow=shadow,
+            shadow_sample_rate=shadow_sample_rate,
+        )
     raise ValueError(f"Unknown backend: {name}")
 
 
@@ -716,7 +759,7 @@ def build_parser(
     parser.add_argument("--port", type=int, default=int(env.get("PORT", "7860")))
     parser.add_argument(
         "--backend",
-        choices=["mock", "shareguard", "remote", "fusion-bundle"],
+        choices=["mock", "shareguard", "remote", "fusion-bundle", "spai", "spai-hybrid"],
         default=env.get("SHAREGUARD_BACKEND", "mock"),
     )
     parser.add_argument("--checkpoint", default=env.get("CHECKPOINT"))
@@ -733,6 +776,28 @@ def build_parser(
     parser.add_argument(
         "--bundle-cache",
         default=env.get("SHAREGUARD_MODEL_CACHE"),
+    )
+    parser.add_argument("--spai-checkpoint", default=env.get("SPAI_CHECKPOINT"))
+    parser.add_argument("--spai-source-dir", default=env.get("SPAI_SOURCE_DIR"))
+    parser.add_argument("--spai-config", default=env.get("SPAI_CONFIG"))
+    parser.add_argument(
+        "--spai-source-revision",
+        default=env.get("SPAI_SOURCE_REVISION"),
+    )
+    parser.add_argument(
+        "--spai-threshold",
+        type=float,
+        default=float(env.get("SPAI_THRESHOLD", "0.5")),
+    )
+    parser.add_argument(
+        "--spai-max-dimension",
+        type=int,
+        default=int(env.get("SPAI_MAX_DIMENSION", "2048")),
+    )
+    parser.add_argument(
+        "--shadow-sample-rate",
+        type=float,
+        default=float(env.get("SHAREGUARD_SHADOW_SAMPLE_RATE", "0")),
     )
     return parser
 
@@ -755,6 +820,24 @@ def validate_model_source(config: PlatformConfig, args) -> None:
         raise ValueError(
             "SHAREGUARD_BUNDLE_SHA256 is required for pilot or production checkpoints"
         )
+    if args.backend in {"spai", "spai-hybrid"}:
+        if not args.spai_checkpoint or not args.spai_source_dir:
+            raise ValueError(
+                "SPAI_CHECKPOINT and SPAI_SOURCE_DIR are required for SPAI backends"
+            )
+        if not config.spai_checkpoint_sha256:
+            raise ValueError(
+                "SPAI_CHECKPOINT_SHA256 is required for pilot or production"
+            )
+    if args.backend == "spai-hybrid" and args.shadow_sample_rate > 0.0:
+        if args.bundle and Path(args.bundle).expanduser().is_dir():
+            raise ValueError(
+                "pilot and production require a verified shadow archive or signed URL"
+            )
+        if not config.bundle_sha256:
+            raise ValueError(
+                "SHAREGUARD_BUNDLE_SHA256 is required when private shadow mode is enabled"
+            )
 
 
 def main(argv=None, environ: Optional[Mapping[str, str]] = None):
@@ -777,6 +860,14 @@ def main(argv=None, environ: Optional[Mapping[str, str]] = None):
         bundle_url=args.bundle_url,
         bundle_cache=args.bundle_cache,
         expected_sha256=config.bundle_sha256,
+        spai_checkpoint=args.spai_checkpoint,
+        spai_source_dir=args.spai_source_dir,
+        spai_config=args.spai_config,
+        spai_expected_sha256=config.spai_checkpoint_sha256,
+        spai_source_revision=args.spai_source_revision,
+        spai_threshold=args.spai_threshold,
+        spai_max_dimension=args.spai_max_dimension,
+        shadow_sample_rate=args.shadow_sample_rate,
     )
     service = AnalysisService(backend, config)
     if config.mode in {"pilot", "production"}:

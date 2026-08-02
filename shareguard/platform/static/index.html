@@ -40,7 +40,7 @@
       <div class="command-actions">
         <div class="engine-state">
           <span class="state-block credible" aria-hidden="true"></span>
-          <span id="engineLabel">等待私有模型授权，尚未生成结论</span>
+          <span id="engineLabel">等待云端推理授权，尚未生成结论</span>
         </div>
         <button id="modelConnectionButton" class="model-connection-button" type="button" aria-haspopup="dialog" aria-controls="modelConnectionDialog">
           <span class="model-connection-indicator" aria-hidden="true"></span>
@@ -55,7 +55,7 @@
     <section class="threat-strip" aria-label="全局威胁态势" data-i18n-aria-label="threat.aria">
       <div class="threat-copy">
         <span>INFERENCE STATUS:</span>
-        <strong>[ PRIVATE MODEL / LIVE RESULTS ONLY ]</strong>
+        <strong>[ PROTECTED SCREENING / LIVE RESULTS ONLY ]</strong>
       </div>
       <canvas id="throughputCanvas" width="320" height="24" aria-label="实时处理吞吐量" data-i18n-aria-label="throughput.aria"></canvas>
       <div class="threat-meta">
@@ -119,7 +119,7 @@
 
           <div id="caseContext" class="event-briefing">
             <span>EVENT BRIEFING</span>
-            <p>导入 JPEG、PNG 或 WebP 影像后，系统将调用私有模型生成本次文件的图像级判定。</p>
+            <p>导入 JPEG、PNG 或 WebP 影像后，系统将调用云端筛查引擎生成本次文件的图像级判定。</p>
           </div>
 
           <div id="evidenceViewport" class="evidence-viewport" tabindex="0" aria-label="影像证据透写台" data-i18n-aria-label="evidence.viewport" data-lens-locked="false">
@@ -259,7 +259,7 @@
     </main>
 
     <footer class="system-footer">
-      <span>SHAREGUARD / PRIVATE MODEL BOUNDARY ACTIVE</span>
+      <span>SHAREGUARD / SCREENING GATEWAY ACTIVE</span>
       <span id="footerCase">CASE #PENDING</span>
       <button id="openReviewerButton" type="button" data-i18n="review.open">生成受控审查视图</button>
     </footer>
@@ -296,11 +296,11 @@
       <header>
         <div>
           <span>PRIVATE INFERENCE ACCESS</span>
-          <h2 id="modelConnectionTitle" data-i18n="model.title">连接 ShareGuard 私有模型</h2>
+          <h2 id="modelConnectionTitle" data-i18n="model.title">连接 ShareGuard 云端推理</h2>
         </div>
         <button id="closeModelConnectionButton" class="dialog-icon-button" type="button" aria-label="关闭模型连接窗口" data-i18n-aria-label="model.closeAria">×</button>
       </header>
-      <p id="modelConnectionDescription" data-i18n="model.description">输入演示凭证后，影像会通过加密连接发送到私有推理网关。模型权重与内部参数不会进入浏览器或公开仓库。</p>
+      <p id="modelConnectionDescription" data-i18n="model.description">输入访问凭证后，影像会通过加密连接发送到受保护的云端筛查网关。模型权重与内部参数不会进入浏览器或公开仓库。</p>
       <label for="modelEndpoint">
         <span data-i18n="model.endpoint">私有网关</span>
         <input id="modelEndpoint" type="url" readonly aria-readonly="true">

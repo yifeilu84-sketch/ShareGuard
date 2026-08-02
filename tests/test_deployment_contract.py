@@ -84,6 +84,40 @@ class DeploymentContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mock backend"):
             validate_model_source(config, args)
 
+    def test_parser_supports_verified_spai_hybrid_runtime(self):
+        parser = build_parser({
+            "SHAREGUARD_BACKEND": "spai-hybrid",
+            "SPAI_CHECKPOINT": "/models/spai.pth",
+            "SPAI_SOURCE_DIR": "/opt/spai",
+            "SPAI_CONFIG": "/opt/spai/configs/spai.yaml",
+            "SHAREGUARD_SHADOW_SAMPLE_RATE": "0.25",
+        })
+
+        args = parser.parse_args([])
+
+        self.assertEqual(args.backend, "spai-hybrid")
+        self.assertEqual(args.spai_checkpoint, "/models/spai.pth")
+        self.assertEqual(args.spai_source_dir, "/opt/spai")
+        self.assertEqual(args.spai_config, "/opt/spai/configs/spai.yaml")
+        self.assertEqual(args.shadow_sample_rate, 0.25)
+
+    def test_production_spai_hybrid_requires_public_checkpoint_digest(self):
+        parser = build_parser({})
+        args = parser.parse_args([
+            "--backend",
+            "spai-hybrid",
+            "--spai-checkpoint",
+            "spai.pth",
+            "--spai-source-dir",
+            "/opt/spai",
+        ])
+
+        with self.assertRaisesRegex(ValueError, "SPAI_CHECKPOINT_SHA256"):
+            validate_model_source(
+                PlatformConfig(mode="production", api_token="secret"),
+                args,
+            )
+
     def test_dockerfile_runs_non_root_and_has_healthcheck(self):
         text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 

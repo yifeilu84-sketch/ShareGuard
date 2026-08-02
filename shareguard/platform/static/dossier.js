@@ -11,7 +11,7 @@ const EMPTY_CASE = Object.freeze({
   source: "USER UPLOAD",
   handler: "CURRENT SESSION",
   timestamp: "—",
-  briefing: "导入影像后，系统将调用私有模型生成本次文件的图像级判定。",
+  briefing: "导入影像后，系统将调用云端筛查引擎生成本次文件的图像级判定。",
   deadlineSeconds: 0
 });
 const modelConnection = {
@@ -236,7 +236,7 @@ async function handleFile(file) {
     source: "EDITORIAL DROPZONE",
     handler: "CURRENT SESSION",
     timestamp: `${stamp.toISOString().slice(0, 19).replace("T", " ")} UTC`,
-    briefing: t("case.upload.briefing", "该影像由当前工作台导入，系统将调用私有模型生成图像级判定与本图衍生鲁棒性视图。")
+    briefing: t("case.upload.briefing", "该影像由当前工作台导入，系统将调用云端筛查引擎生成图像级判定与本图衍生鲁棒性视图。")
   };
   state.activePayload = null;
   state.annotations = [];
@@ -258,12 +258,12 @@ async function handleFile(file) {
 
 async function analyzeCurrentFile() {
   document.body.classList.add("is-analyzing");
-  dom.stageStatusLabel.textContent = t("evidence.building", "正在调用私有模型");
+  dom.stageStatusLabel.textContent = t("evidence.building", "正在调用云端筛查引擎");
   let analysisCompleted = false;
   try {
     if (usesRemoteModel() && !modelConnection.connected) {
       modelConnection.pendingAnalysis = true;
-      renderAnalysisUnavailable(t("model.waiting", "等待连接私有模型后开始真实分析。"));
+      renderAnalysisUnavailable(t("model.waiting", "等待连接云端推理后开始真实分析。"));
       openModelConnectionDialog({
         state: "idle",
         message: t("model.authorizationRequired", "请输入访问凭证以启动这张影像的真实模型分析。")
@@ -321,8 +321,6 @@ async function analyzeCurrentFile() {
         modelConnection.status = "connected";
         modelConnection.connected = true;
         renderModelConnectionState();
-      } else {
-        dom.engineLabel.textContent = t("engine.private", "私有模型服务已连接，仅返回产品级结论");
       }
     }
   } catch (error) {
@@ -416,7 +414,7 @@ function renderAnalysisUnavailable(message) {
   dom.uncertaintyValue.textContent = "—";
   dom.recommendedAction.textContent = waitingForUpload
     ? t("model.importAction", "导入影像以开始真实分析")
-    : t("model.connectAction", "连接私有模型后重新分析");
+    : t("model.connectAction", "连接云端推理后重新分析");
   dom.machineNarrative.textContent = message;
   dom.evidenceList.innerHTML = "";
   dom.forceReleaseButton.disabled = true;
@@ -432,6 +430,7 @@ function setAnalysisPayload(payload) {
   state.propagationViews = normalized.propagation_views;
   state.annotations = normalized.localization.annotations;
   state.provenance = normalized.provenance;
+  renderLiveEngineState(normalized);
   renderDecision(normalized);
   renderViews(normalized);
   renderAnnotations();
@@ -491,6 +490,9 @@ function normalizePayload(payload) {
       }
     : { available: false, hops: [], reason: String(payload.provenance?.reason || "source_data_not_provided") };
   const reliability = normalizeReliability(payload.reliability);
+  const detectorEngine = String(payload.detector_engine || payload.model_version || "unknown");
+  const decisionLayer = String(payload.decision_layer || "shareguard-dossier-v1");
+  const shadowEvaluation = normalizeShadowEvaluation(payload.shadow_evaluation);
   const summary = String(report.summary || payload.recommended_action || "模型已返回图像级判定。");
   const recommendedAction = String(report.recommended_action || payload.recommended_action || "请结合来源信息进行人工复核。");
   const notes = Array.isArray(report.notes)
@@ -502,6 +504,10 @@ function normalizePayload(payload) {
     backend: String(payload.backend || ""),
     request_id: String(payload.request_id || ""),
     model_version: String(payload.model_version || ""),
+    detector_engine: detectorEngine,
+    engine_role: String(payload.engine_role || "primary"),
+    decision_layer: decisionLayer,
+    shadow_evaluation: shadowEvaluation,
     file_name: sanitizeFilename(payload.file_name || state.currentFile?.name || "upload"),
     model_score: modelScore,
     score_kind: String(payload.score_kind || "uncalibrated_ai_generation_score"),
@@ -565,6 +571,30 @@ function normalizeReliability(value) {
       ? "consistent"
       : "not_required";
   return { performed, status, reason };
+}
+
+function normalizeShadowEvaluation(value) {
+  const status = ["agree", "disagree", "unavailable", "not_sampled", "disabled"].includes(value?.status)
+    ? value.status
+    : "disabled";
+  return {
+    performed: value?.performed === true,
+    status,
+    engine: String(value?.engine || "shareguard-private-v1"),
+    affects_decision: false
+  };
+}
+
+function renderLiveEngineState(payload) {
+  if (!dom.engineLabel || !payload) return;
+  const engineIndicator = dom.engineLabel.previousElementSibling;
+  engineIndicator?.classList.remove("caution", "risk");
+  engineIndicator?.classList.add("credible");
+  if (payload.detector_engine === "spai-public-v1" && payload.decision_layer === "shareguard-dossier-v1") {
+    dom.engineLabel.textContent = t("engine.liveSpai", "在线筛查：SPAI PUBLIC V1 / ShareGuard 决策层");
+    return;
+  }
+  dom.engineLabel.textContent = `${payload.detector_engine.toUpperCase()} / ${payload.decision_layer.toUpperCase()}`;
 }
 
 function renderDecision(payload) {
@@ -1209,7 +1239,7 @@ async function connectPrivateModel(event) {
   submitButton.disabled = true;
   modelConnection.status = "connecting";
   renderModelConnectionState();
-  setModelConnectionStatus("connecting", t("model.connecting", "正在验证私有模型网关…"));
+  setModelConnectionStatus("connecting", t("model.connecting", "正在验证云端推理网关…"));
 
   try {
     const response = await fetch(privateApiUrl("/v1/ready"), {
@@ -1232,14 +1262,14 @@ async function connectPrivateModel(event) {
     if (!response.ok) {
       throw new ModelConnectionError(
         "gateway",
-        `${t("model.unavailable", "私有模型网关暂不可用。")} HTTP ${response.status}`
+        `${t("model.unavailable", "云端推理网关暂不可用。")} HTTP ${response.status}`
       );
     }
     const payload = await response.json();
     if (payload.status !== "ready") {
       throw new ModelConnectionError(
         "gateway",
-        t("model.notReady", "私有模型仍在启动，请稍后重试。")
+        t("model.notReady", "云端推理服务仍在启动，请稍后重试。")
       );
     }
 
@@ -1268,7 +1298,7 @@ async function connectPrivateModel(event) {
       "error",
       error instanceof ModelConnectionError
         ? error.message
-        : t("model.networkError", "无法连接私有模型网关，请确认私有服务正在运行。")
+        : t("model.networkError", "无法连接云端推理网关，请稍后重试。")
     );
     renderModelConnectionState();
     dom.modelPassword.focus();
@@ -1284,10 +1314,10 @@ function disconnectPrivateModel() {
   modelConnection.pendingAnalysis = false;
   modelConnection.status = "idle";
   dom.modelPassword.value = "";
-  setModelConnectionStatus("idle", t("model.disconnected", "私有模型连接已断开。"));
+  setModelConnectionStatus("idle", t("model.disconnected", "云端推理连接已断开。"));
   renderModelConnectionState();
   if (state.currentFile) {
-    renderAnalysisUnavailable(t("model.waiting", "等待连接私有模型后开始真实分析。"));
+    renderAnalysisUnavailable(t("model.waiting", "等待连接云端推理后开始真实分析。"));
   }
 }
 
@@ -1322,13 +1352,17 @@ function renderModelConnectionState() {
   engineIndicator?.classList.remove("credible", "caution", "risk");
   if (modelConnection.connected) {
     engineIndicator?.classList.add("credible");
-    dom.engineLabel.textContent = t("engine.private", "私有模型服务已连接，仅返回产品级结论");
+    if (state.activePayload) {
+      renderLiveEngineState(state.activePayload);
+    } else {
+      dom.engineLabel.textContent = t("engine.connected", "云端推理网关已连接，等待实际引擎返回");
+    }
   } else if (status === "error") {
     engineIndicator?.classList.add("risk");
-    dom.engineLabel.textContent = t("engine.unavailable", "私有模型连接失败，未生成鉴真结论");
+    dom.engineLabel.textContent = t("engine.unavailable", "云端推理连接失败，未生成鉴真结论");
   } else {
     engineIndicator?.classList.add("caution");
-    dom.engineLabel.textContent = t("engine.awaiting", "等待私有模型授权，凭证不会写入仓库");
+    dom.engineLabel.textContent = t("engine.awaiting", "等待云端推理授权，凭证不会写入仓库");
   }
 }
 
@@ -1413,6 +1447,10 @@ async function createEvidencePackage(payload = state.activePayload) {
     decision: {
       action: payload.decision,
       label: decisionLabel(payload.decision),
+      detector_engine: payload.detector_engine,
+      engine_role: payload.engine_role,
+      decision_layer: payload.decision_layer,
+      shadow_evaluation: payload.shadow_evaluation,
       model_score: payload.model_score,
       score_kind: payload.score_kind,
       decision_margin: payload.decision_margin,
@@ -1683,9 +1721,8 @@ async function refreshLocalizedView() {
   if (usesRemoteModel()) {
     renderModelConnectionState();
   } else {
-    dom.engineLabel.textContent = state.activePayload?.backend
-      ? t("engine.private", "私有模型服务已连接，仅返回产品级结论")
-      : t("engine.unavailable", "真实模型未连接，未生成鉴真结论");
+    if (state.activePayload) renderLiveEngineState(state.activePayload);
+    else dom.engineLabel.textContent = t("engine.unavailable", "云端推理未连接，未生成鉴真结论");
   }
 }
 

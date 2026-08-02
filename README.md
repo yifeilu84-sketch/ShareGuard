@@ -12,6 +12,18 @@ ShareGuard is a comprehensive framework for robust AI-generated image detection 
 2. **ShareGuard**: A degradation-invariant and uncertainty-aware detection framework
 3. **Reliability evaluation**: Calibration, risk-coverage, and selective prediction
 
+## Live Deployment Disclosure
+
+The public website currently uses the pinned open-source **SPAI** checkpoint as
+its live image-level screening engine. ShareGuard's private fusion model runs
+only as a sampled, non-authoritative shadow evaluation and never changes the
+website decision or contributes a public score. The interface reports the
+actual detector identity and does not fabricate localization or provenance.
+
+Research benchmark results for ShareGuard describe the private experimental
+model and are separate from individual results produced by the public website.
+See `THIRD_PARTY_NOTICES.md` for the pinned SPAI source and artifact digests.
+
 ## Key Features
 
 - **Multi-view sharing simulation**: Simulate real-world propagation (JPEG, resize, crop, screenshot, meme, platform-specific)

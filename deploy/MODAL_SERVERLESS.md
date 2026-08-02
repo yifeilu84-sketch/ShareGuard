@@ -1,13 +1,18 @@
 # ShareGuard Modal Serverless 上线手册
 
-本手册把真实 ShareGuard 融合模型部署到 Modal T4，并由 Cloudflare Worker
-在 `https://api.shareguard.systems` 提供稳定入口。GitHub 只保存代码和部署契约；
-模型归档、Modal Token、HTTP Basic 凭据和实际 Modal URL 均不得提交。
+本手册把 ShareGuard 在线筛查服务部署到 Modal T4，并由 Cloudflare Worker
+在 `https://api.shareguard.systems` 提供稳定入口。在线结论由固定版本的公开
+SPAI 引擎生成；ShareGuard 私有融合模型仅按 25% 比例执行影子评估，不改变
+用户结论，也不返回私有模型分数。GitHub 只保存代码和部署契约；模型归档、
+Modal Token、HTTP Basic 凭据和实际 Modal URL 均不得提交。
 
 ## 0. 上线边界
 
 - 保留现有 Named Tunnel，直到 Modal 直连和 Worker 预览均完成真实图片推理。
 - 模型只上传到私有 Modal Volume，不进入 Git、GitHub Release 或容器镜像。
+- 前端必须显示实际 `detector_engine`，不得把 SPAI 结果表述为 ShareGuard 私有模型结果。
+- 影子评估只返回执行状态与是否一致，私有分数、阈值、权重路径和中间特征不出容器。
+- 当前模型不提供定位输出时，前端不得生成固定 A1/A2 框或伪造传播溯源。
 - Worker 不读取上传内容，不缓存响应，只流式转发两个公开 API 路径。
 - `api.shareguard.systems` 切换前记录现有 Tunnel、DNS 和启动方式。
 - 所有命令都从仓库根目录执行；PowerShell 会话结束后清除进程环境变量。
@@ -99,6 +104,18 @@ $Digest = "9f48b64d4a90a0ae815711f2769216e16fac990e45114d3ed5256e536aeb5d82"
   --remote-name shareguard-noisyshare-fusion-v1-safe.tar.gz
 ```
 
+公开筛查模型使用 SPAI 官方权重转换得到的纯张量 `safetensors` 制品，避免在
+服务端反序列化不受信任的 pickle 对象。转换前后的来源与摘要记录在
+`THIRD_PARTY_NOTICES.md`；当前部署制品必须满足：
+
+```text
+remote name: spai-public-v1-b1b1422f.safetensors
+source revision: b1b1422f2912594ba2620b311dde5d28a230d04c
+sha256: ac5caaa6457172c53e36acdf665051ff292d2c3906b3911c51ed5db6844c2f87
+```
+
+SPAI 制品同样只上传到 `shareguard-models` 私有 Volume，不进入 Git 或镜像。
+
 上传后只核对文件名与大小，不下载或公开 Volume 内容：
 
 ```powershell
@@ -128,7 +145,7 @@ Get-Content deploy/modal/.env | Where-Object {
 }
 ```
 
-使用仓库内真实示例图验证匿名 `401`、鉴权就绪、真实推理和响应脱敏：
+使用仓库内真实示例图验证匿名 `401`、鉴权就绪、真实推理、引擎身份和响应脱敏：
 
 ```powershell
 .\.venv-modal\Scripts\python.exe scripts/modal/verify_cloud_endpoint.py `
@@ -138,7 +155,9 @@ Get-Content deploy/modal/.env | Where-Object {
 ```
 
 只有命令输出 `ready_latency_ms`、`inference_latency_ms`、`model_version` 和
-`decision` 四个字段且退出码为 0，才进入下一步。
+`decision` 四个字段且退出码为 0，才进入下一步。分析响应还必须满足
+`detector_engine=spai-public-v1`、`decision_layer=shareguard-dossier-v1`；影子评估
+即使失败也不得改变主结果。
 
 ## 6. 部署 Worker 预览
 

@@ -1,0 +1,21 @@
+diff --git a/spai/models/backbones.py b/spai/models/backbones.py
+index 113ca2b..3f586e2 100644
+--- a/spai/models/backbones.py
++++ b/spai/models/backbones.py
+@@ -19 +19,4 @@ from torch import nn
+-import clip
++try:
++    import clip
++except ImportError:
++    clip = None
+@@ -46,0 +50,2 @@ class CLIPBackbone(nn.Module):
++        if clip is None:
++            raise RuntimeError("The optional OpenAI CLIP package is not installed")
+diff --git a/spai/models/sid.py b/spai/models/sid.py
+index 1e0cd76..33b9bd3 100644
+--- a/spai/models/sid.py
++++ b/spai/models/sid.py
+@@ -35 +34,0 @@ from . import backbones
+-from spai.utils import save_image_with_attention_overlay
+@@ -325,0 +325 @@ class PatchBasedMFViT(nn.Module):
++            from spai.utils import save_image_with_attention_overlay

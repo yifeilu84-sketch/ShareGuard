@@ -107,6 +107,7 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertTrue(payload["request_id"].startswith("sg_req_"))
         self.assertNotIn("backend", payload)
+        self.assertNotIn("private-fake", json.dumps(payload))
 
     def test_v1_ready_uses_product_level_response(self):
         status, payload, _ = self.request("GET", "/v1/ready")
@@ -372,7 +373,7 @@ class PlatformHttpTests(unittest.TestCase):
         self.assertIn("ai_probability", payload)
         self.assertIn("report", payload)
         self.assertNotIn("raw", payload)
-        self.assertNotIn("backend", payload)
+        self.assertEqual(payload["backend"], "screening-model-api")
 
     def test_legacy_analyze_uses_same_service_and_marks_deprecation(self):
         status, payload, headers = self.request(
@@ -386,7 +387,7 @@ class PlatformHttpTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("probability_ai_generated", payload)
-        self.assertEqual(payload["backend"], "private-model-api")
+        self.assertEqual(payload["backend"], "screening-model-api")
         self.assertEqual(headers.get("Deprecation"), "true")
         self.assertEqual(headers.get("X-ShareGuard-Demo"), "true")
 
