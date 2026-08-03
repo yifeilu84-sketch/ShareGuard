@@ -241,7 +241,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('name = "RATE_LIMITER"', config)
         self.assertIn('class_name = "ShareGuardRateLimiter"', config)
         self.assertIn('new_sqlite_classes = ["ShareGuardRateLimiter"]', config)
-        self.assertIn('EDGE_RATE_LIMIT_PER_MINUTE = "3"', config)
+        self.assertIn('EDGE_RATE_LIMIT_PER_MINUTE = "10"', config)
         self.assertIn('EDGE_DAILY_QUOTA = "50"', config)
         self.assertIn('name = "shareguard-api-gateway-preview"', preview_config)
         self.assertIn("workers_dev = true", preview_config)

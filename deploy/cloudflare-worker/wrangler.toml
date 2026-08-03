@@ -9,7 +9,7 @@ routes = [
 
 [vars]
 ALLOWED_ORIGIN = "https://shareguard.systems"
-EDGE_RATE_LIMIT_PER_MINUTE = "3"
+EDGE_RATE_LIMIT_PER_MINUTE = "10"
 EDGE_DAILY_QUOTA = "50"
 
 [[durable_objects.bindings]]
