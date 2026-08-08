@@ -27,6 +27,29 @@ model and are separate from individual results produced by the public website.
 See `docs/model-disclosure.md` for the deployment boundary and
 `THIRD_PARTY_NOTICES.md` for the pinned SPAI source and artifact digests.
 
+## Production Workbench (P0)
+
+The production site is a working editorial evidence desk rather than a static
+model report. Its current P0 workflow includes:
+
+- persistent case triage with priority, assignee, SLA state, tasks, filtering,
+  pagination, and audited workflow transitions;
+- AES-256-GCM encrypted media custody in a private R2 bucket, with authorized
+  retrieval and browser-side SHA-256 verification;
+- comparison of actual uploaded case versions, without fabricated
+  reconstruction, localization, or propagation history;
+- reviewer-supported provenance nodes and relationships, clearly separated
+  into digest-verified and declared-unverified evidence;
+- expiring, revocable, case-scoped reviewer links for controlled media access,
+  comments, and human annotations;
+- server-signed `.sgd` v3 evidence packages with an immutable case snapshot,
+  audit chain, media manifest, eligible embedded media, optional local
+  passphrase encryption, and offline verification.
+
+Organization-wide RBAC, SSO/MFA, managed platform moderation APIs, external
+timestamp authorities, KMS/HSM key custody, and model-drift governance are P1
+work and are not claimed by this release.
+
 ## Key Features
 
 - **Multi-view sharing simulation**: Simulate real-world propagation (JPEG, resize, crop, screenshot, meme, platform-specific)

@@ -30,23 +30,24 @@ const state = {
   activeCaseRecord: null,
   caseSummaries: [],
   metrics: null,
+  caseQuery: { status: "", priority: "", nextCursor: null, total: 0, loading: false },
   selectedVersionId: "",
   selectedAnnotationId: "",
   annotationEditing: false,
   annotationDraft: null,
   activePayload: null,
-  activeViewIndex: 0,
   currentFile: null,
   currentDataUrl: "",
   currentObjectUrl: null,
+  versionMedia: new Map(),
   propagationViews: [],
   annotations: [],
-  provenance: { available: false, hops: [], reason: "source_data_not_provided" },
-  waterfallRows: [],
+  provenance: { available: false, nodes: [], edges: [], reason: "source_data_not_provided" },
   custodyEvents: [],
   evidencePackageBlob: null,
   evidencePackage: null,
-  evidencePackageName: ""
+  evidencePackageName: "",
+  reviewAccess: { active: false, reviewerName: "", expiresAt: "" }
 };
 
 const dom = {};
@@ -70,6 +71,7 @@ function cacheDom() {
     "imageInput", "engineLabel", "systemClock", "intakeRate", "queueCount",
     "throughputCanvas", "radarView", "dossierView", "custodyView", "reviewerView",
     "waterfallFeed", "quarantineZone", "quarantineCount", "casePicker",
+    "caseStatusFilter", "casePriorityFilter", "caseLoadMoreButton",
     "stageCaseCode", "dossierTitle", "caseTimestamp", "caseSource", "caseHandler",
     "caseContext", "evidenceViewport", "processedImage", "previewImage", "originalLayer",
     "forensicCanvas", "forensicLens", "compareRange", "stageViewLabel", "emptyEvidenceState",
@@ -82,6 +84,8 @@ function cacheDom() {
     "custodyDecision", "custodyEvents", "custodySeal", "footerCase",
     "openReviewerButton", "reviewerImage", "reviewerTitle", "reviewerVerdict",
     "reviewerNarrative", "reviewForm", "reviewerComment", "reviewThread",
+    "reviewGrantPanel", "reviewGrantForm", "reviewerName", "reviewGrantExpiry",
+    "reviewGrantOutput", "reviewGrantLink", "copyReviewGrantButton", "reviewGrantList",
     "sealDialog", "sealTitle", "sealLog", "sealResult", "downloadSgdButton",
     "encryptEvidencePackage", "evidencePassphraseField", "evidencePassphrase",
     "dropOverlay", "toast",
@@ -89,10 +93,13 @@ function cacheDom() {
     "modelConnectionForm", "modelEndpoint", "modelUsername", "modelPassword",
     "modelConnectionStatus", "modelDisconnectButton", "closeModelConnectionButton",
     "annotationLayer", "provenanceBody", "provenanceStatus",
-    "caseRefreshButton", "caseDeleteButton", "versionInput", "versionImportButton",
+    "caseRefreshButton", "caseDeleteButton", "versionInput", "versionImportButton", "scopedReviewReturnButton",
     "localMediaInput", "localMediaButton", "annotationEditButton", "annotationNote",
     "annotationSaveButton", "annotationClearButton", "provenanceForm", "provenanceChannel",
     "provenanceUrl", "provenanceCapturedAt", "provenanceNote", "feedbackButton",
+    "provenanceTargetVersion", "provenanceRelationship", "provenanceDigest",
+    "workflowState", "workflowDue", "workflowOpenCount", "workflowPriority",
+    "workflowAssignee", "workflowSaveButton", "workflowTasks",
     "decisionDialog", "decisionForm", "humanDecisionAction", "humanDecisionReason",
     "humanDecisionNote", "closeDecisionButton", "feedbackDialog", "feedbackForm",
     "feedbackOutcome", "feedbackBasis", "closeFeedbackButton", "metricsSummary",
@@ -128,14 +135,28 @@ function init() {
     refreshLocalizedView().catch(() => showToast("Locale refresh failed."));
   });
 
-  const reviewOnly = new URLSearchParams(window.location.search).get("review") === "1";
-  if (reviewOnly) {
+  const reviewToken = consumeReviewTokenFragment();
+  if (reviewToken && apiClient) {
+    state.reviewAccess.active = true;
+    apiClient.setReviewToken(reviewToken);
+    document.body.classList.add("scoped-review-mode");
     switchView("reviewer", { updateHistory: false });
+    initializeProductionWorkbench();
+    loadScopedReview().catch((error) => showApiError(error, "受控审查链接无法打开。"));
   } else {
-    switchView("dossier", { updateHistory: false });
+    const reviewOnly = new URLSearchParams(window.location.search).get("review") === "1";
+    switchView(reviewOnly ? "reviewer" : "dossier", { updateHistory: false });
+    initializeProductionWorkbench();
   }
+}
 
-  initializeProductionWorkbench();
+function consumeReviewTokenFragment() {
+  const fragment = String(window.location.hash || "").replace(/^#/, "");
+  const token = new URLSearchParams(fragment).get("review_token") || "";
+  if (token && window.history?.replaceState) {
+    window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
+  }
+  return token;
 }
 
 function initializeProductionWorkbench() {
@@ -185,20 +206,24 @@ function switchView(viewName, options = {}) {
 
 function renderCasePicker() {
   const cases = Array.isArray(state.caseSummaries) ? state.caseSummaries : [];
-  dom.quarantineCount.textContent = String(cases.length).padStart(2, "0");
-  dom.queueCount.textContent = String(cases.filter((item) => item.status !== "sealed").length).padStart(2, "0");
+  dom.quarantineCount.textContent = String(state.caseQuery.total || cases.length).padStart(2, "0");
+  dom.queueCount.textContent = String(cases.filter((item) => !["sealed", "closed_allowed"].includes(item.status)).length).padStart(2, "0");
+  dom.caseLoadMoreButton.hidden = state.caseQuery.nextCursor === null;
+  dom.caseLoadMoreButton.disabled = state.caseQuery.loading;
   if (!cases.length) {
     dom.casePicker.innerHTML = `<div class="capability-empty">${escapeHtml(t("radar.empty", "尚无持久案件。导入影像后，案件会在此出现。"))}</div>`;
     return;
   }
   dom.casePicker.innerHTML = cases.map((item) => {
     const decision = item.human_decision?.action || item.latest_machine_recommendation || "review";
+    const workflow = item.workflow || {};
+    const overdue = caseIsOverdue(item);
     return `
-      <article class="quarantine-card" data-status="${escapeHtml(item.status)}">
+      <article class="quarantine-card${overdue ? " overdue" : ""}" data-status="${escapeHtml(item.status)}" data-priority="${escapeHtml(workflow.priority || "normal")}">
         <button type="button" data-case-id="${escapeHtml(item.case_id)}">
-          <span><b>${escapeHtml(shortCaseId(item.case_id))}</b><time>${escapeHtml(formatUtc(item.updated_at))}</time></span>
+          <span><b>${escapeHtml(shortCaseId(item.case_id))}</b><time data-sla-due="${escapeHtml(workflow.sla_due_at || "")}">${escapeHtml(formatSla(workflow.sla_due_at, item.status))}</time></span>
           <strong>${escapeHtml(item.title)}</strong>
-          <span><small>${escapeHtml(item.version_count)} VERSION${item.version_count === 1 ? "" : "S"}</small><em>${escapeHtml(humanDecisionLabel(decision))}</em></span>
+          <span><small>${escapeHtml(priorityLabel(workflow.priority))} / ${escapeHtml(workflow.open_task_count || 0)} TASK / ${escapeHtml(workflow.assignee || "未分配")}</small><em>${escapeHtml(humanDecisionLabel(decision))}</em></span>
         </button>
       </article>`;
   }).join("");
@@ -209,20 +234,34 @@ function renderCasePicker() {
 
 async function refreshPersistentWorkbench(options = {}) {
   if (!apiClient || (usesRemoteModel() && !modelConnection.connected)) return;
-  const activeCaseId = options.preserveCase ? state.activeCaseRecord?.case_id : "";
   await Promise.all([loadCaseList(), loadOperationalMetrics()]);
-  if (activeCaseId) {
-    const current = state.caseSummaries.find((item) => item.case_id === activeCaseId);
-    if (!current) resetActiveCase();
-  }
 }
 
-async function loadCaseList() {
-  const payload = await apiClient.listCases();
-  state.caseSummaries = Array.isArray(payload?.cases) ? payload.cases : [];
-  renderCasePicker();
-  renderWaterfall();
-  return state.caseSummaries;
+async function loadCaseList(options = {}) {
+  if (state.reviewAccess.active || state.caseQuery.loading) return state.caseSummaries;
+  const append = options.append === true;
+  state.caseQuery.loading = true;
+  dom.caseLoadMoreButton.disabled = true;
+  try {
+    const payload = await apiClient.listCases({
+      status: state.caseQuery.status,
+      priority: state.caseQuery.priority,
+      cursor: append ? state.caseQuery.nextCursor : 0,
+      limit: 20
+    });
+    const incoming = Array.isArray(payload?.cases) ? payload.cases : [];
+    state.caseSummaries = append
+      ? [...new Map([...state.caseSummaries, ...incoming].map((item) => [item.case_id, item])).values()]
+      : incoming;
+    state.caseQuery.nextCursor = payload?.next_cursor ?? null;
+    state.caseQuery.total = Number(payload?.total ?? state.caseSummaries.length);
+    renderCasePicker();
+    renderWaterfall();
+    return state.caseSummaries;
+  } finally {
+    state.caseQuery.loading = false;
+    dom.caseLoadMoreButton.disabled = false;
+  }
 }
 
 async function loadOperationalMetrics() {
@@ -252,7 +291,7 @@ async function openPersistedCase(caseId) {
     const record = payload?.case;
     const version = record?.versions?.at(-1);
     if (!record || !version) throw new Error("案件记录不完整。");
-    releaseCurrentObjectUrl();
+    releaseAllVersionMedia();
     state.currentFile = null;
     state.currentDataUrl = "";
     state.activeCase = {
@@ -260,14 +299,20 @@ async function openPersistedCase(caseId) {
       code: record.case_id,
       title: record.title,
       workflow: "持久案件复核",
-      source: record.declared_provenance?.channel || "DETACHED MEDIA",
+      source: record.declared_provenance?.channel || "PRIVATE MEDIA CUSTODY",
       handler: "AUTHENTICATED REVIEWER",
       timestamp: formatUtc(record.created_at),
-      briefing: "该案件已从持久证据链重新打开。影像原件不在服务器保存；可在本机重新关联并核对 SHA-256。"
+      briefing: "该案件已从持久证据链重新打开。授权后从加密私有存储取回所选媒体，并在浏览器核对 SHA-256。"
     };
     setAnalysisPayload(payloadFromStoredVersion(record, version));
     renderPersistentCase(record);
     switchView("dossier");
+    try {
+      await loadSelectedVersionMedia(record, version);
+    } catch (error) {
+      renderMediaUnavailable(record, version);
+      showApiError(error, "案宗已打开，但受保护媒体当前不可用。");
+    }
   } catch (error) {
     showApiError(error, "无法打开持久案件。");
   }
@@ -299,7 +344,7 @@ function payloadFromStoredVersion(record, version) {
     calibration: version.calibration,
     policy: version.policy,
     localization: { available: false, reason: "image_level_model", annotations: [] },
-    provenance: { available: false, reason: "declared_source_rendered_separately", hops: [] },
+    provenance: { available: false, reason: "case_graph_rendered_separately", nodes: [], edges: [] },
     report: version.report || {},
     propagation_views: []
   };
@@ -315,9 +360,7 @@ function renderPersistentCase(record) {
   state.annotations = (record.annotations?.[state.selectedVersionId] || [])
     .map(normalizePersistedAnnotation)
     .filter(Boolean);
-  state.provenance = record.declared_provenance
-    ? declaredProvenanceView(record.declared_provenance)
-    : { available: false, hops: [], reason: "source_data_not_provided" };
+  state.provenance = provenanceGraphView(record);
   state.custodyEvents = (record.events || []).map((event) => ({
     time: formatUtc(event.created_at),
     actor: String(event.actor_id || "").slice(-10).toUpperCase(),
@@ -327,6 +370,9 @@ function renderPersistentCase(record) {
   renderCaseContext(state.activeCase);
   renderAnnotations();
   renderProvenance();
+  renderWorkflow(record);
+  renderComments(record);
+  renderReviewGrants(record);
   renderCustodyLog();
   dom.custodyDecision.textContent = record.human_decision
     ? humanDecisionLabel(record.human_decision.action).toUpperCase()
@@ -368,7 +414,7 @@ async function deleteActiveCase() {
 }
 
 function resetActiveCase() {
-  releaseCurrentObjectUrl();
+  releaseAllVersionMedia();
   state.currentFile = null;
   state.currentDataUrl = "";
   state.activeCaseRecord = null;
@@ -434,7 +480,7 @@ async function handleFile(file) {
     return;
   }
   state.currentFile = file;
-  releaseCurrentObjectUrl();
+  releaseAllVersionMedia();
   state.currentObjectUrl = URL.createObjectURL(file);
   state.currentDataUrl = state.currentObjectUrl;
   const dimensions = await readImageDimensions(state.currentDataUrl);
@@ -448,13 +494,13 @@ async function handleFile(file) {
     source: "EDITORIAL DROPZONE",
     handler: "CURRENT SESSION",
     timestamp: `${stamp.toISOString().slice(0, 19).replace("T", " ")} UTC`,
-    briefing: t("case.upload.briefing", "该影像由当前工作台导入，系统将调用云端筛查引擎生成图像级判定与本图衍生鲁棒性视图。")
+    briefing: t("case.upload.briefing", "该影像由当前工作台导入，系统将调用云端筛查引擎生成图像级判定，并在授权案件中保全原始字节。")
   };
   state.activePayload = null;
   state.activeCaseRecord = null;
   state.selectedVersionId = "";
   state.annotations = [];
-  state.provenance = { available: false, hops: [], reason: "source_data_not_provided" };
+  state.provenance = { available: false, nodes: [], edges: [], reason: "source_data_not_provided" };
   state.propagationViews = [];
   dom.emptyEvidenceState.hidden = true;
   dom.processedImage.hidden = false;
@@ -495,6 +541,11 @@ async function analyzeCurrentFile() {
     if (payload.backend === "mock") {
       throw new Error(t("model.demoRejected", "正式工作台拒绝演示模型响应。"));
     } else {
+      rememberVersionMedia(payload.version_id, state.currentFile, payload.media_sha256, {
+        url: state.currentObjectUrl,
+        source: "current_upload"
+      });
+      state.currentObjectUrl = null;
       setAnalysisPayload(payload);
       if (payload.case) renderPersistentCase(payload.case);
       await refreshPersistentWorkbench({ preserveCase: true });
@@ -581,7 +632,7 @@ function renderAnalysisUnavailable(message) {
   narrativeAnimationToken += 1;
   state.activePayload = null;
   state.annotations = [];
-  state.provenance = { available: false, hops: [], reason: "source_data_not_provided" };
+  state.provenance = { available: false, nodes: [], edges: [], reason: "source_data_not_provided" };
   renderViews({ propagation_views: [] });
   renderAnnotations();
   renderProvenance();
@@ -628,9 +679,7 @@ function setAnalysisPayload(payload) {
   state.propagationViews = normalized.propagation_views;
   state.annotations = normalized.case?.annotations?.[state.selectedVersionId]
     || normalized.localization.annotations;
-  state.provenance = normalized.case?.declared_provenance
-    ? declaredProvenanceView(normalized.case.declared_provenance)
-    : normalized.provenance;
+  state.provenance = normalized.case ? provenanceGraphView(normalized.case) : normalized.provenance;
   renderLiveEngineState(normalized);
   renderDecision(normalized);
   renderViews(normalized);
@@ -659,39 +708,20 @@ function normalizePayload(payload) {
   const riskLevel = String(payload.risk_level || "uncertain");
   const report = payload.report && typeof payload.report === "object" ? payload.report : {};
   const scoreNotice = String(payload.score_notice || report.score_notice || "模型分数未经概率校准，不代表图像为AI生成的事实概率。");
-  const rawViews = Array.isArray(payload.robustness_views)
-    ? payload.robustness_views
-    : Array.isArray(payload.propagation_views)
-      ? payload.propagation_views
-      : [];
-  const generatedViews = rawViews.map((view, index) => ({
-    id: String(view.id || `robustness-${index}`),
-    label: String(view.label || `鲁棒性视图 ${index + 1}`),
-    data_url: String(view.image_data_url || view.data_url || ""),
-    size: view.width && view.height ? `${view.width} × ${view.height}` : String(view.size || "衍生视图"),
-    filter: "none",
-    origin: String(view.origin || "generated_from_upload"),
-    observed: view.observed === true
-  })).filter((view) => view.data_url);
   const currentView = state.currentDataUrl
     ? [{ id: "current", label: t("view.uploaded", "上传原图"), data_url: state.currentDataUrl, size: "SOURCE", filter: "none", origin: "uploaded", observed: true }]
     : [];
-  const localization = payload.localization && payload.localization.available === true
-    ? {
-        available: true,
-        annotations: Array.isArray(payload.localization.annotations)
-          ? payload.localization.annotations.map(normalizeAnnotation).filter(Boolean)
-          : [],
-        reason: ""
-      }
-    : { available: false, annotations: [], reason: String(payload.localization?.reason || "image_level_model") };
-  const provenance = payload.provenance && payload.provenance.available === true
-    ? {
-        available: true,
-        hops: Array.isArray(payload.provenance.hops) ? payload.provenance.hops.map(normalizeProvenanceHop).filter(Boolean) : [],
-        reason: ""
-      }
-    : { available: false, hops: [], reason: String(payload.provenance?.reason || "source_data_not_provided") };
+  const localization = {
+    available: false,
+    annotations: [],
+    reason: String(payload.localization?.reason || "image_level_model")
+  };
+  const provenance = {
+    available: false,
+    nodes: [],
+    edges: [],
+    reason: String(payload.provenance?.reason || "source_data_not_provided")
+  };
   const reliability = normalizeReliability(payload.reliability);
   const detectorEngine = String(payload.detector_engine || payload.model_version || "unknown");
   const decisionLayer = String(payload.decision_layer || "shareguard-dossier-v1");
@@ -741,7 +771,7 @@ function normalizePayload(payload) {
       notes: notes.map(String),
       disclaimer: String(report.disclaimer || "该结果为技术辅助风险信号，不替代司法鉴定或来源调查。")
     },
-    propagation_views: [...currentView, ...generatedViews]
+    propagation_views: currentView
   };
 }
 
@@ -756,24 +786,14 @@ function normalizeAnnotation(annotation, index) {
     id: String(annotation.annotation_id || annotation.id || `annotation-${index + 1}`),
     annotation_id: String(annotation.annotation_id || annotation.id || `annotation-${index + 1}`),
     label: String(annotation.label || `R${index + 1}`),
-    title: String(annotation.title || (annotation.origin === "human_reviewer" ? "人工复核标注" : "模型定位")),
+    title: String(annotation.title || "人工复核标注"),
     detail: String(annotation.note || annotation.detail || ""),
     note: String(annotation.note || annotation.detail || ""),
-    origin: String(annotation.origin || "model_output"),
+    origin: "human_reviewer",
     x: clamp(x, 0, 1),
     y: clamp(y, 0, 1),
     width: clamp(width, 0, 1),
     height: clamp(height, 0, 1)
-  };
-}
-
-function normalizeProvenanceHop(hop, index) {
-  if (!hop || typeof hop !== "object") return null;
-  return {
-    order: Number.isFinite(Number(hop.order)) ? Number(hop.order) : index + 1,
-    source: String(hop.source || "UNKNOWN SOURCE"),
-    timestamp: String(hop.timestamp || "—"),
-    operation: String(hop.operation || "RECORDED")
   };
 }
 
@@ -923,31 +943,37 @@ function annotationId(annotation) {
 
 function renderProvenance() {
   if (!dom.provenanceBody || !dom.provenanceStatus) return;
-  const provenance = state.provenance || { available: false, hops: [] };
-  if (provenance.declared) {
-    dom.provenanceStatus.textContent = "DECLARED / UNVERIFIED";
-    dom.provenanceBody.className = "provenance-declaration";
-    dom.provenanceBody.innerHTML = `
-      <dl>
-        <div><dt>CHANNEL</dt><dd>${escapeHtml(provenance.channel || "—")}</dd></div>
-        <div><dt>URL</dt><dd>${provenance.source_url ? `<a href="${escapeHtml(provenance.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(provenance.source_url)}</a>` : "—"}</dd></div>
-        <div><dt>CAPTURED</dt><dd>${escapeHtml(formatUtc(provenance.captured_at))}</dd></div>
-        <div><dt>NOTE</dt><dd>${escapeHtml(provenance.note || "—")}</dd></div>
-      </dl>`;
-    return;
-  }
-  if (!provenance.available || !provenance.hops.length) {
+  const provenance = state.provenance || { available: false, nodes: [], edges: [] };
+  if (!provenance.available || !provenance.nodes.length) {
     dom.provenanceStatus.textContent = "NO SOURCE DATA";
     dom.provenanceBody.className = "capability-empty";
     dom.provenanceBody.textContent = t("provenance.unavailable", "未提供来源或传播链路数据，系统不会生成虚构拓扑。");
     return;
   }
-  dom.provenanceStatus.textContent = `${provenance.hops.length} VERIFIED HOPS`;
-  dom.provenanceBody.className = "provenance-hop-list";
-  dom.provenanceBody.innerHTML = provenance.hops
-    .sort((a, b) => a.order - b.order)
-    .map((hop) => `<div><span>${escapeHtml(hop.source)}</span><b>${escapeHtml(hop.operation)}</b><time>${escapeHtml(hop.timestamp)}</time></div>`)
+  const nodes = new Map(provenance.nodes.map((node) => [node.node_id, node]));
+  const verified = provenance.edges.filter((edge) => edge.verification_status === "digest_verified").length;
+  const declared = provenance.edges.filter((edge) => edge.verification_status === "declared_unverified").length;
+  dom.provenanceStatus.textContent = `${verified} DIGEST VERIFIED / ${declared} DECLARED`;
+  dom.provenanceBody.className = "provenance-graph-list";
+  const edgeRows = provenance.edges.map((edge) => {
+    const source = nodes.get(edge.source_node_id) || {};
+    const target = nodes.get(edge.target_node_id) || {};
+    const status = edge.verification_status === "digest_verified" ? "DIGEST VERIFIED" : "DECLARED / UNVERIFIED";
+    return `<article data-verification="${escapeHtml(edge.verification_status || "declared_unverified")}">
+      <div><span>${escapeHtml(source.channel || "DECLARED SOURCE")}</span><b>${escapeHtml(provenanceRelationshipLabel(edge.relationship))}</b><span>${escapeHtml(versionNodeLabel(target))}</span></div>
+      <small>${escapeHtml(status)} / ${escapeHtml(edge.evidence_basis || "reviewer_declaration")}</small>
+      ${source.source_url ? `<a href="${escapeHtml(source.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.source_url)}</a>` : ""}
+      <p>${escapeHtml(source.note || "未附加说明")}</p>
+      <time>${escapeHtml(formatUtc(source.captured_at || edge.recorded_at))}</time>
+    </article>`;
+  }).join("");
+  const unlinkedMedia = provenance.nodes
+    .filter((node) => node.kind === "media_version" && !provenance.edges.some((edge) => edge.target_node_id === node.node_id))
+    .map((node) => `<article data-verification="media_only"><div><span>UPLOADED MEDIA</span><b>保全节点</b><span>${escapeHtml(versionNodeLabel(node))}</span></div><small>SHA-256 ${escapeHtml(String(node.media_sha256 || "").slice(0, 16).toUpperCase())}…</small></article>`)
     .join("");
+  dom.provenanceBody.innerHTML = edgeRows || unlinkedMedia
+    ? `${edgeRows}${unlinkedMedia}`
+    : `<div class="capability-empty">仅有媒体节点，尚未记录来源关系。</div>`;
 }
 
 function restartCssAnimation(element, className) {
@@ -987,42 +1013,36 @@ function typeWriterEffect(element, text, speed = 14) {
 }
 
 function renderViews(payload) {
-  const suppliedViews = Array.isArray(payload.propagation_views) ? payload.propagation_views : [];
   const persistedVersions = state.activeCaseRecord?.versions || payload.case?.versions || [];
-  const views = suppliedViews.length
-    ? suppliedViews
-    : state.currentDataUrl
-      ? [{ id: "current", label: t("view.uploaded", "上传原图"), data_url: state.currentDataUrl, size: "SOURCE", filter: "none", origin: "uploaded" }]
-      : [];
+  const views = persistedVersions.map((version) => ({
+    id: version.version_id,
+    label: versionRoleLabel(version.role),
+    data_url: state.versionMedia.get(version.version_id)?.url || "",
+    size: version.image?.width && version.image?.height ? `${version.image.width} × ${version.image.height}` : "MEDIA",
+    origin: "uploaded_version"
+  }));
+  if (!views.length && state.currentDataUrl) {
+    views.push({ id: "current", label: t("view.uploaded", "当前上传"), data_url: state.currentDataUrl, size: "SOURCE", origin: "current_upload" });
+  }
   state.propagationViews = views;
-  dom.compareRange.disabled = views.length < 2;
   const versionButtons = persistedVersions.map((version, index) => `
     <button class="evidence-version" type="button" data-version-id="${escapeHtml(version.version_id)}" aria-pressed="${version.version_id === state.selectedVersionId}">
       <span>V${String(index + 1).padStart(2, "0")}</span>
-      <span><strong>${escapeHtml(version.role === "original" ? "原始导入" : version.role === "observed_variant" ? "观察传播版本" : "生成压力视图")}</strong><small>${escapeHtml(formatModelScore(version.model_score))}</small></span>
+      <span><strong>${escapeHtml(versionRoleLabel(version.role))}</strong><small>${escapeHtml(formatModelScore(version.model_score))} / ${escapeHtml(version.media_custody?.status === "encrypted_private" ? "PRIVATE" : "DIGEST ONLY")}</small></span>
     </button>`).join("");
-  const generatedButtons = views
-    .map((view, index) => ({ view, index }))
-    .filter(({ view }) => view.origin === "generated_from_upload")
-    .map(({ view, index }, generatedIndex) => `
-    <button class="evidence-version generated" type="button" data-view-index="${index}" aria-pressed="false">
-      <span>G${String(generatedIndex + 1).padStart(2, "0")}</span>
-      <span><strong>${escapeHtml(view.label)}</strong><small>${escapeHtml(view.origin === "generated_from_upload" ? "GENERATED STRESS VIEW" : view.size)}</small></span>
-    </button>`).join("");
-  dom.viewGrid.innerHTML = versionButtons || generatedButtons
-    ? `${versionButtons}${generatedButtons}`
+  dom.viewGrid.innerHTML = versionButtons
+    ? versionButtons
     : `<div class="capability-empty">${escapeHtml(t("evidence.noViews", "导入影像后显示案件版本。"))}</div>`;
   dom.viewGrid.querySelectorAll("[data-version-id]").forEach((button) => {
     button.addEventListener("click", () => selectStoredVersion(button.dataset.versionId));
   });
-  dom.viewGrid.querySelectorAll("[data-view-index]").forEach((button) => {
-    button.addEventListener("click", () => selectEvidenceView(Number(button.dataset.viewIndex)));
-  });
-  if (!views.length) {
+  const selected = persistedVersions.find((version) => version.version_id === state.selectedVersionId) || persistedVersions.at(-1);
+  const selectedMedia = selected ? state.versionMedia.get(selected.version_id) : null;
+  if (!selectedMedia && !state.currentDataUrl) {
     dom.emptyEvidenceState.hidden = false;
-    dom.emptyEvidenceState.querySelector("strong").textContent = persistedVersions.length ? "DETACHED MEDIA" : "AWAITING IMAGE";
+    dom.emptyEvidenceState.querySelector("strong").textContent = persistedVersions.length ? "LOADING PROTECTED MEDIA" : "AWAITING IMAGE";
     dom.emptyEvidenceState.querySelector("span").textContent = persistedVersions.length
-      ? "服务器仅保存媒体摘要。请关联本地原件以查看影像。"
+      ? "正在从加密私有存储取回并核对媒体摘要"
       : "导入影像以启动真实模型分析";
     dom.processedImage.hidden = true;
     dom.originalLayer.hidden = true;
@@ -1033,43 +1053,54 @@ function renderViews(payload) {
   }
   dom.emptyEvidenceState.hidden = true;
   dom.processedImage.hidden = false;
-  dom.originalLayer.hidden = false;
-  dom.splitIndicator.hidden = false;
-  dom.comparisonControl.hidden = false;
-  selectEvidenceView(0, { record: false });
+  const selectedUrl = selectedMedia?.url || state.currentDataUrl;
+  const original = persistedVersions.find((version) => version.role === "original") || persistedVersions[0];
+  const originalMedia = original ? state.versionMedia.get(original.version_id) : null;
+  const compareReady = Boolean(originalMedia?.url && selected?.version_id !== original?.version_id);
+  dom.processedImage.src = selectedUrl;
+  dom.processedImage.style.filter = "none";
+  dom.previewImage.src = compareReady ? originalMedia.url : selectedUrl;
+  dom.reviewerImage.src = selectedUrl;
+  dom.reviewerImage.hidden = false;
+  dom.originalLayer.hidden = !compareReady;
+  dom.splitIndicator.hidden = !compareReady;
+  dom.comparisonControl.hidden = !compareReady;
+  dom.compareRange.disabled = !compareReady;
+  dom.stageViewLabel.textContent = versionRoleLabel(selected?.role || "original").toUpperCase();
+  dom.stageStatusLabel.textContent = compareReady
+    ? "正在对比案件中的两个真实上传版本"
+    : "受保护媒体已取回并通过 SHA-256 核对";
+  window.setTimeout(resizeForensicCanvas, 0);
 }
 
-function selectStoredVersion(versionId) {
+function renderMediaUnavailable(record, version) {
+  dom.emptyEvidenceState.hidden = false;
+  dom.emptyEvidenceState.querySelector("strong").textContent = "MEDIA UNAVAILABLE";
+  dom.emptyEvidenceState.querySelector("span").textContent = version?.media_custody?.status === "detached_digest_only"
+    ? "该历史版本仅保留摘要；可重新关联 SHA-256 匹配的本地原件"
+    : "受保护媒体暂时无法取回；案件记录与审计链仍可复核";
+  dom.processedImage.hidden = true;
+  dom.originalLayer.hidden = true;
+  dom.splitIndicator.hidden = true;
+  dom.comparisonControl.hidden = true;
+  dom.stageViewLabel.textContent = versionRoleLabel(version?.role || "original").toUpperCase();
+  dom.stageStatusLabel.textContent = "媒体不可用 / 案件元数据已载入";
+  dom.fileMeta.textContent = `${String(version?.file_name || "MEDIA").toUpperCase()} / SHA-256 ${String(version?.media_sha256 || "").slice(0, 12).toUpperCase() || "UNAVAILABLE"}`;
+  renderReviewer(state.activePayload || payloadFromStoredVersion(record, version));
+}
+
+async function selectStoredVersion(versionId) {
   const record = state.activeCaseRecord;
   const version = record?.versions?.find((item) => item.version_id === versionId);
   if (!record || !version) return;
-  const currentDigest = state.currentFile ? state.activePayload?.media_sha256 : "";
-  if (currentDigest && currentDigest !== version.media_sha256) {
-    releaseCurrentObjectUrl();
-    state.currentFile = null;
-    state.currentDataUrl = "";
-  }
   state.selectedVersionId = version.version_id;
   setAnalysisPayload(payloadFromStoredVersion(record, version));
   renderPersistentCase(record);
-}
-
-function selectEvidenceView(index, options = {}) {
-  const view = state.propagationViews[index];
-  if (!view) return;
-  state.activeViewIndex = index;
-  dom.processedImage.src = view.data_url || state.currentDataUrl;
-  dom.previewImage.src = state.currentDataUrl;
-  dom.reviewerImage.src = state.currentDataUrl;
-  dom.processedImage.style.filter = view.filter || "none";
-  dom.stageViewLabel.textContent = view.label.toUpperCase();
-  dom.stageStatusLabel.textContent = index === 0
-    ? t("evidence.imageLevel", "真实模型已返回图像级结论")
-    : t("evidence.robustnessReview", "本图生成的鲁棒性视图 / 非真实传播证据");
-  dom.viewGrid.querySelectorAll("[data-view-index]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(Number(button.dataset.viewIndex) === index));
-  });
-  window.setTimeout(resizeForensicCanvas, 0);
+  try {
+    await loadSelectedVersionMedia(record, version);
+  } catch (error) {
+    showApiError(error, "无法读取所选版本媒体。");
+  }
 }
 
 function bindDossierControls() {
@@ -1080,24 +1111,75 @@ function bindDossierControls() {
   syncComparisonSplit();
 }
 
-function declaredProvenanceView(record) {
+function provenanceGraphView(record) {
+  const graph = record?.provenance_graph;
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes.filter((node) => node && node.node_id) : [];
+  const edges = Array.isArray(graph?.edges) ? graph.edges.filter((edge) => edge && edge.edge_id) : [];
   return {
-    available: true,
-    declared: true,
-    status: "declared_unverified",
-    channel: String(record?.channel || ""),
-    source_url: String(record?.source_url || ""),
-    captured_at: String(record?.captured_at || ""),
-    note: String(record?.note || ""),
-    hops: []
+    available: nodes.length > 0,
+    nodes,
+    edges,
+    reason: nodes.length ? "" : "source_data_not_provided"
   };
+}
+
+async function loadSelectedVersionMedia(record, version) {
+  if (!record || !version) return;
+  dom.stageStatusLabel.textContent = "正在读取受保护媒体并核对 SHA-256";
+  const selectedMedia = await ensureVersionMedia(record, version);
+  const original = record.versions?.find((item) => item.role === "original") || record.versions?.[0];
+  if (original && original.version_id !== version.version_id) {
+    await ensureVersionMedia(record, original);
+  }
+  state.currentFile = selectedMedia.blob;
+  state.currentDataUrl = selectedMedia.url;
+  renderViews(state.activePayload || payloadFromStoredVersion(record, version));
+  renderReviewer(state.activePayload);
+  dom.fileMeta.textContent = `${String(version.file_name || "MEDIA").toUpperCase()} / SHA-256 VERIFIED / ${formatBytes(selectedMedia.blob.size)}`;
+}
+
+async function ensureVersionMedia(record, version) {
+  const cached = state.versionMedia.get(version.version_id);
+  if (cached) return cached;
+  const response = state.reviewAccess.active
+    ? await apiClient.getReviewMedia(version.version_id)
+    : await apiClient.getCaseMedia(record.case_id, version.version_id);
+  const expected = String(version.media_sha256 || "").toLowerCase();
+  if (response.sha256 && response.sha256 !== expected) {
+    throw new Error("媒体响应摘要与案件记录不一致。");
+  }
+  const actual = await sha256Blob(response.blob);
+  if (!expected || actual !== expected) {
+    throw new Error("媒体 SHA-256 核对失败。");
+  }
+  return rememberVersionMedia(version.version_id, response.blob, actual, { source: "private_custody" });
+}
+
+function rememberVersionMedia(versionId, blob, sha256, options = {}) {
+  if (!versionId || !(blob instanceof Blob)) return null;
+  const existing = state.versionMedia.get(versionId);
+  if (existing?.url && existing.url !== options.url) URL.revokeObjectURL(existing.url);
+  const entry = {
+    blob,
+    sha256: String(sha256 || "").toLowerCase(),
+    source: String(options.source || "memory"),
+    url: options.url || URL.createObjectURL(blob)
+  };
+  state.versionMedia.set(versionId, entry);
+  return entry;
 }
 
 function populateWorkflowForms(record) {
   const provenance = record?.declared_provenance || {};
+  dom.provenanceTargetVersion.innerHTML = (record?.versions || []).map((version, index) => (
+    `<option value="${escapeHtml(version.version_id)}">V${String(index + 1).padStart(2, "0")} / ${escapeHtml(versionRoleLabel(version.role))}</option>`
+  )).join("");
+  dom.provenanceTargetVersion.value = provenance.target_version_id || state.selectedVersionId || record?.versions?.at(-1)?.version_id || "";
+  dom.provenanceRelationship.value = provenance.relationship || "received_from";
   dom.provenanceChannel.value = provenance.channel || "";
   dom.provenanceUrl.value = provenance.source_url || "";
   dom.provenanceCapturedAt.value = toLocalDateTimeValue(provenance.captured_at);
+  dom.provenanceDigest.value = provenance.source_media_sha256 || "";
   dom.provenanceNote.value = provenance.note || "";
   const decision = record?.human_decision || {};
   dom.humanDecisionAction.value = decision.action || "";
@@ -1116,6 +1198,19 @@ function bindPersistentWorkflowControls() {
     refreshPersistentWorkbench({ preserveCase: true }).catch((error) => showApiError(error, "刷新案件数据失败。"));
   });
   dom.caseDeleteButton.addEventListener("click", deleteActiveCase);
+  dom.scopedReviewReturnButton.addEventListener("click", () => switchView("reviewer"));
+  dom.caseStatusFilter.addEventListener("change", () => {
+    state.caseQuery.status = dom.caseStatusFilter.value;
+    loadCaseList().catch((error) => showApiError(error, "案件筛选失败。"));
+  });
+  dom.casePriorityFilter.addEventListener("change", () => {
+    state.caseQuery.priority = dom.casePriorityFilter.value;
+    loadCaseList().catch((error) => showApiError(error, "案件筛选失败。"));
+  });
+  dom.caseLoadMoreButton.addEventListener("click", () => {
+    loadCaseList({ append: true }).catch((error) => showApiError(error, "更多案件加载失败。"));
+  });
+  dom.workflowSaveButton.addEventListener("click", submitWorkflowUpdate);
   dom.versionInput.addEventListener("change", () => {
     const [file] = dom.versionInput.files || [];
     dom.versionInput.value = "";
@@ -1130,6 +1225,43 @@ function bindPersistentWorkflowControls() {
   dom.annotationSaveButton.addEventListener("click", saveReviewerAnnotations);
   dom.annotationClearButton.addEventListener("click", deleteSelectedAnnotation);
   dom.provenanceForm.addEventListener("submit", submitDeclaredProvenance);
+}
+
+function renderWorkflow(record) {
+  if (!record || !dom.workflowState) return;
+  const workflow = record.workflow || {};
+  const tasks = Array.isArray(workflow.tasks) ? workflow.tasks : [];
+  const openTasks = tasks.filter((task) => task.status === "open");
+  dom.workflowState.textContent = `${caseStatusLabel(record.status)} / ${priorityLabel(workflow.priority)}`;
+  dom.workflowState.dataset.overdue = String(caseIsOverdue(record));
+  dom.workflowDue.textContent = formatSla(workflow.sla_due_at, record.status);
+  dom.workflowOpenCount.textContent = String(openTasks.length);
+  dom.workflowPriority.value = workflow.priority || "normal";
+  dom.workflowAssignee.value = workflow.assignee || "";
+  dom.workflowTasks.innerHTML = tasks.length
+    ? tasks.map((task) => `<article data-status="${escapeHtml(task.status || "open")}"><span>${escapeHtml(taskStatusLabel(task.status))}</span><b>${escapeHtml(task.title || task.type || "Review task")}</b><time>${escapeHtml(formatUtc(task.due_at || task.completed_at))}</time></article>`).join("")
+    : '<div class="capability-empty">当前没有任务。</div>';
+  const disabled = record.status === "sealed" || state.reviewAccess.active;
+  dom.workflowPriority.disabled = disabled;
+  dom.workflowAssignee.disabled = disabled;
+  dom.workflowSaveButton.disabled = disabled;
+}
+
+async function submitWorkflowUpdate() {
+  const record = state.activeCaseRecord;
+  if (!record || record.status === "sealed" || state.reviewAccess.active) return;
+  try {
+    const payload = await apiClient.updateWorkflow(record.case_id, {
+      priority: dom.workflowPriority.value,
+      assignee: dom.workflowAssignee.value.trim()
+    });
+    renderPersistentCase(payload.case);
+    if (state.activePayload) state.activePayload.case = payload.case;
+    await loadCaseList();
+    showToast("分诊优先级与负责人已写入审计链。");
+  } catch (error) {
+    showApiError(error, "分诊更新失败。");
+  }
 }
 
 async function analyzeObservedVersion(file) {
@@ -1154,10 +1286,13 @@ async function analyzeObservedVersion(file) {
       versionRole: "observed_variant",
       locale: i18n?.getLocale() || "zh-CN"
     });
-    releaseCurrentObjectUrl();
     state.currentFile = file;
-    state.currentObjectUrl = URL.createObjectURL(file);
-    state.currentDataUrl = state.currentObjectUrl;
+    const objectUrl = URL.createObjectURL(file);
+    rememberVersionMedia(payload.version_id, file, payload.media_sha256, {
+      url: objectUrl,
+      source: "current_upload"
+    });
+    state.currentDataUrl = objectUrl;
     setAnalysisPayload(payload);
     renderPersistentCase(payload.case);
     await refreshPersistentWorkbench({ preserveCase: true });
@@ -1184,22 +1319,16 @@ async function attachLocalMedia(file) {
     if (digest !== String(version.media_sha256 || "").toLowerCase()) {
       throw new Error("本地文件 SHA-256 与所选版本不一致。");
     }
-    releaseCurrentObjectUrl();
     state.currentFile = file;
-    state.currentObjectUrl = URL.createObjectURL(file);
-    state.currentDataUrl = state.currentObjectUrl;
+    const entry = rememberVersionMedia(version.version_id, file, digest, {
+      source: "local_digest_verified"
+    });
+    state.currentDataUrl = entry.url;
     dom.previewImage.src = state.currentDataUrl;
     dom.processedImage.src = state.currentDataUrl;
     dom.reviewerImage.src = state.currentDataUrl;
     dom.reviewerImage.hidden = false;
-    renderViews({ propagation_views: [{
-      id: version.version_id,
-      label: version.role === "original" ? "已验证本地原件" : "已验证观察版本",
-      data_url: state.currentDataUrl,
-      size: `${version.image?.width || "?"} × ${version.image?.height || "?"}`,
-      origin: "local_digest_verified",
-      observed: true
-    }] });
+    renderViews(state.activePayload || payloadFromStoredVersion(state.activeCaseRecord, version));
     dom.fileMeta.textContent = `${file.name.toUpperCase()} / SHA-256 VERIFIED / ${formatBytes(file.size)}`;
     showToast("本地媒体与案宗摘要匹配，已在内存中关联。");
   } catch (error) {
@@ -1210,7 +1339,7 @@ async function attachLocalMedia(file) {
 function toggleAnnotationEditing() {
   if (!state.activeCaseRecord || state.activeCaseRecord.status === "sealed") return;
   if (!state.currentDataUrl) {
-    showToast("请先关联当前版本的本地媒体，再进行框选标注。");
+    showToast("请先载入当前版本媒体，再进行框选标注。");
     return;
   }
   state.annotationEditing = !state.annotationEditing;
@@ -1236,7 +1365,9 @@ async function saveReviewerAnnotations() {
     note: String(item.note || item.detail || "")
   }));
   try {
-    const payload = await apiClient.replaceAnnotations(record.case_id, versionId, annotations);
+    const payload = state.reviewAccess.active
+      ? await apiClient.replaceReviewAnnotations(versionId, annotations)
+      : await apiClient.replaceAnnotations(record.case_id, versionId, annotations);
     renderPersistentCase(payload.case);
     if (state.activePayload) state.activePayload.case = payload.case;
     showToast("人工标注已写入哈希审计链。");
@@ -1262,9 +1393,12 @@ async function submitDeclaredProvenance(event) {
     : "";
   try {
     const payload = await apiClient.declareProvenance(record.case_id, {
+      version_id: dom.provenanceTargetVersion.value,
+      relationship: dom.provenanceRelationship.value,
       channel: dom.provenanceChannel.value.trim(),
       source_url: dom.provenanceUrl.value.trim(),
       captured_at: capturedAt,
+      source_media_sha256: dom.provenanceDigest.value.trim().toLowerCase(),
       note: dom.provenanceNote.value.trim()
     });
     renderPersistentCase(payload.case);
@@ -1543,16 +1677,21 @@ function renderWaterfall() {
 }
 
 function startRadarFeed() {
-  dom.intakeRate.textContent = "—";
+  dom.intakeRate.textContent = "0";
   dom.queueCount.textContent = "00";
+  window.setInterval(() => {
+    if (document.hidden || state.reviewAccess.active) return;
+    refreshPersistentWorkbench({ preserveCase: true }).catch(() => {});
+  }, 30_000);
 }
 
 function startQuarantineCountdowns() {
   window.setInterval(() => {
-    dom.casePicker.querySelectorAll("[data-countdown]").forEach((node) => {
-      const next = Math.max(0, Number(node.dataset.countdown) - 1);
-      node.dataset.countdown = String(next);
-      node.textContent = formatCountdown(next);
+    dom.casePicker.querySelectorAll("[data-sla-due]").forEach((node) => {
+      const card = node.closest(".quarantine-card");
+      const summary = state.caseSummaries.find((item) => item.case_id === card?.querySelector("[data-case-id]")?.dataset.caseId);
+      node.textContent = formatSla(node.dataset.slaDue, summary?.status);
+      card?.classList.toggle("overdue", caseIsOverdue(summary));
     });
   }, 1000);
 }
@@ -1641,7 +1780,7 @@ function canonicalCaseExport() {
   const record = state.activeCaseRecord;
   if (!record) throw new Error("NO PERSISTED CASE");
   return {
-    schema: "shareguard.case.export.v2",
+    schema: "shareguard.case.export.v3",
     generated_at: new Date().toISOString(),
     case_id: record.case_id,
     title: record.title,
@@ -1668,7 +1807,10 @@ function canonicalCaseExport() {
       report: version.report
     })),
     declared_provenance: record.declared_provenance,
+    provenance_graph: record.provenance_graph,
     annotations: record.annotations,
+    workflow: record.workflow,
+    comments: record.comments,
     machine_recommendation: selectedVersion()?.machine_recommendation || null,
     human_decision: record.human_decision,
     feedback: record.feedback,
@@ -1677,7 +1819,9 @@ function canonicalCaseExport() {
     trust: {
       package_schema: "shareguard.sgd.v3",
       signature_state: record.status === "sealed" ? "server_signed" : "not_sealed",
-      media_storage: "detached_digest_only"
+      media_storage: record.versions?.every((version) => version.media_custody?.status === "encrypted_private")
+        ? "encrypted_private_custody"
+        : "mixed_or_digest_only"
     }
   };
 }
@@ -1709,7 +1853,7 @@ function buildReportHtml(bundle) {
 <section><h2 class="risk">${escapeHtml(humanDecisionLabel(bundle.human_decision?.action))}</h2><dl><div><dt>MACHINE RECOMMENDATION</dt><dd>${escapeHtml(humanDecisionLabel(version.machine_recommendation))}</dd></div><div><dt>MODEL SCORE</dt><dd>${escapeHtml(formatModelScore(version.model_score))}</dd></div><div><dt>ENGINE RELEASE</dt><dd>${escapeHtml(version.engine_release || "—")}</dd></div><div><dt>SCORE KIND</dt><dd>${escapeHtml(version.score_kind || "—")}</dd></div></dl></section>
 <section><h2>证据标识</h2><dl><div><dt>MEDIA SHA-256</dt><dd>${escapeHtml(version.media_sha256 || "—")}</dd></div><div><dt>CHAIN HEAD</dt><dd>${escapeHtml(bundle.chain_head)}</dd></div><div><dt>EVENTS</dt><dd>${escapeHtml(bundle.event_count)}</dd></div><div><dt>TRUST STATE</dt><dd>${escapeHtml(bundle.trust.signature_state)}</dd></div></dl></section>
 <section><h2>来源声明</h2><p>${provenance ? `${escapeHtml(provenance.channel)} / DECLARED UNVERIFIED / ${escapeHtml(provenance.source_url || "NO URL")}` : "未记录来源声明"}</p></section>
-<section><small>机器分数未经概率校准，仅作为风险筛查信号；人工决定为正式处置记录。服务器仅保留媒体摘要，不嵌入原始影像。</small></section></body></html>`;
+  <section><small>机器分数未经概率校准，仅作为风险筛查信号；人工决定为正式处置记录。授权媒体在限定保留期内经应用层 AES-256-GCM 加密托管；导出的 .sgd v3 会明确记录嵌入或摘要分离状态。</small></section></body></html>`;
 }
 
 function saveHtmlReport() {
@@ -1763,31 +1907,78 @@ function downloadBlob(content, filename, type) {
 }
 
 function bindReviewerControls() {
-  dom.openReviewerButton.addEventListener("click", () => switchView("reviewer"));
+  dom.openReviewerButton.addEventListener("click", () => {
+    if (!state.activeCaseRecord) {
+      showToast("请先打开一个持久案件。");
+      return;
+    }
+    switchView("reviewer");
+    renderReviewer();
+  });
   dom.reviewForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = dom.reviewerComment.value.trim();
-    if (!text) return;
-    const selected = state.annotations.find((item) => annotationId(item) === state.selectedAnnotationId);
-    if (!selected) {
-      showToast("请先在案宗影像上选择或框选一个人工标注。" );
-      return;
+    const record = state.activeCaseRecord;
+    if (!text || !record) return;
+    try {
+      const payload = state.reviewAccess.active
+        ? await apiClient.addReviewComment({ body: text })
+        : await apiClient.addComment(record.case_id, { body: text });
+      dom.reviewerComment.value = "";
+      renderPersistentCase(payload.case);
+      if (state.activePayload) state.activePayload.case = payload.case;
+      showToast("审查意见已写入案件审计链。");
+    } catch (error) {
+      showApiError(error, "审查意见保存失败。");
     }
-    selected.note = text;
-    selected.detail = text;
-    dom.annotationNote.value = text;
-    dom.reviewerComment.value = "";
-    await saveReviewerAnnotations();
   });
+  dom.reviewGrantForm.addEventListener("submit", submitReviewGrant);
+  dom.copyReviewGrantButton.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(dom.reviewGrantLink.value);
+      showToast("受限审查链接已复制。");
+    } catch {
+      showToast("浏览器无法写入剪贴板，请手动复制链接。");
+    }
+  });
+}
+
+async function loadScopedReview() {
+  const payload = await apiClient.getReviewCase();
+  const record = payload?.case;
+  const version = record?.versions?.at(-1);
+  if (!record || !version) throw new Error("受控案件记录不完整。");
+  const context = record.reviewer_context || {};
+  state.reviewAccess.reviewerName = context.reviewer_name || "CASE REVIEWER";
+  state.reviewAccess.expiresAt = context.expires_at || "";
+  state.activeCase = {
+    id: record.case_id,
+    code: record.case_id,
+    title: record.title,
+    workflow: "受控案件审查",
+    source: record.declared_provenance?.channel || "PRIVATE MEDIA CUSTODY",
+    handler: state.reviewAccess.reviewerName,
+    timestamp: formatUtc(record.created_at),
+    briefing: `该链接仅授权查看本案件、读取受保护媒体、提交评论与人工标注；有效期至 ${formatUtc(state.reviewAccess.expiresAt)}。`
+  };
+  setAnalysisPayload(payloadFromStoredVersion(record, version));
+  renderPersistentCase(record);
+  switchView("reviewer", { updateHistory: false });
+  try {
+    await loadSelectedVersionMedia(record, version);
+  } catch (error) {
+    renderMediaUnavailable(record, version);
+    showApiError(error, "受控案件已打开，但受保护媒体当前不可用。");
+  }
 }
 
 function renderReviewer(payload = state.activePayload) {
   if (!payload) return;
-  dom.reviewerTitle.textContent = `CASE #${state.activeCase.code}`;
+  dom.reviewerTitle.textContent = `CASE #${shortCaseId(state.activeCase.code)}`;
   dom.reviewerVerdict.textContent = state.activeCaseRecord?.human_decision
     ? `HUMAN / ${humanDecisionLabel(state.activeCaseRecord.human_decision.action).toUpperCase()}`
     : `MACHINE / ${humanDecisionLabel(payload.decision).toUpperCase()}`;
-  dom.reviewerNarrative.textContent = payload.report.summary;
+  dom.reviewerNarrative.textContent = payload.report?.summary || "该案件尚无机器摘要。";
   if (state.currentDataUrl) {
     dom.reviewerImage.src = state.currentDataUrl;
     dom.reviewerImage.hidden = false;
@@ -1795,22 +1986,81 @@ function renderReviewer(payload = state.activePayload) {
     dom.reviewerImage.removeAttribute("src");
     dom.reviewerImage.hidden = true;
   }
-  renderReviewerNotes();
+  renderComments(state.activeCaseRecord);
 }
 
 function renderReviewerNotes() {
+  renderComments(state.activeCaseRecord);
+}
+
+function renderComments(record) {
   if (!dom.reviewThread) return;
+  const comments = Array.isArray(record?.comments) ? record.comments : [];
   const annotations = state.annotations || [];
-  if (!annotations.length) {
-    dom.reviewThread.innerHTML = '<div class="capability-empty">尚无人工标注。</div>';
-    return;
+  const rows = [
+    ...comments.map((comment) => ({
+      kind: "COMMENT",
+      actor: String(comment.actor_id || "").slice(-10).toUpperCase(),
+      time: comment.recorded_at,
+      body: comment.body
+    })),
+    ...annotations.filter((annotation) => annotation.note || annotation.detail).map((annotation, index) => ({
+      kind: `ANNOTATION R${index + 1}`,
+      actor: String(annotation.actor_id || "HUMAN").slice(-10).toUpperCase(),
+      time: annotation.recorded_at,
+      body: annotation.note || annotation.detail
+    }))
+  ].sort((left, right) => String(left.time || "").localeCompare(String(right.time || "")));
+  dom.reviewThread.innerHTML = rows.length
+    ? rows.map((row) => `<article class="review-note"><time>${escapeHtml(row.kind)} / ${escapeHtml(row.actor || "REVIEWER")} / ${escapeHtml(formatUtc(row.time))}</time><p>${escapeHtml(row.body || "未填写说明")}</p></article>`).join("")
+    : '<div class="capability-empty">尚无审查意见或人工标注。</div>';
+}
+
+async function submitReviewGrant(event) {
+  event.preventDefault();
+  const record = state.activeCaseRecord;
+  if (!record || state.reviewAccess.active) return;
+  try {
+    const payload = await apiClient.issueReviewGrant(record.case_id, {
+      reviewer_name: dom.reviewerName.value.trim(),
+      expires_in_seconds: Number(dom.reviewGrantExpiry.value)
+    });
+    dom.reviewGrantLink.value = payload.review_url;
+    dom.reviewGrantOutput.hidden = false;
+    dom.reviewerName.value = "";
+    renderPersistentCase(payload.case);
+    if (state.activePayload) state.activePayload.case = payload.case;
+    showToast("案件级限时审查权限已生成。");
+  } catch (error) {
+    showApiError(error, "审查权限生成失败。");
   }
-  dom.reviewThread.innerHTML = annotations.map((annotation, index) => `
-    <article class="review-note">
-      <time>R${index + 1} / HUMAN REVIEWER</time>
-      <p>${escapeHtml(annotation.note || annotation.detail || "未填写说明")}</p>
-    </article>
-  `).join("");
+}
+
+function renderReviewGrants(record) {
+  if (!dom.reviewGrantList) return;
+  const grants = Array.isArray(record?.review_grants) ? record.review_grants : [];
+  dom.reviewGrantList.innerHTML = grants.length
+    ? grants.map((grant) => {
+        const active = !grant.revoked_at && Date.parse(grant.expires_at) > Date.now();
+        return `<article data-active="${active}"><div><b>${escapeHtml(grant.reviewer_name)}</b><span>${active ? "ACTIVE" : grant.revoked_at ? "REVOKED" : "EXPIRED"}</span></div><time>${escapeHtml(formatUtc(grant.expires_at))}</time>${active ? `<button type="button" data-revoke-grant="${escapeHtml(grant.grant_id)}">撤销</button>` : ""}</article>`;
+      }).join("")
+    : '<div class="capability-empty">尚未签发案件级审查权限。</div>';
+  dom.reviewGrantList.querySelectorAll("[data-revoke-grant]").forEach((button) => {
+    button.addEventListener("click", () => revokeReviewGrant(button.dataset.revokeGrant));
+  });
+}
+
+async function revokeReviewGrant(grantId) {
+  const record = state.activeCaseRecord;
+  if (!record || state.reviewAccess.active) return;
+  try {
+    const payload = await apiClient.revokeReviewGrant(record.case_id, grantId);
+    renderPersistentCase(payload.case);
+    if (state.activePayload) state.activePayload.case = payload.case;
+    showToast("审查权限已立即撤销。");
+  } catch (error) {
+    showApiError(error, "审查权限撤销失败。");
+  }
 }
 
 function bindDialogControls() {
@@ -2123,6 +2373,14 @@ function releaseCurrentObjectUrl() {
   state.currentObjectUrl = null;
 }
 
+function releaseAllVersionMedia() {
+  releaseCurrentObjectUrl();
+  for (const entry of state.versionMedia.values()) {
+    if (entry?.url) URL.revokeObjectURL(entry.url);
+  }
+  state.versionMedia.clear();
+}
+
 function readImageDimensions(dataUrl) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -2229,6 +2487,71 @@ function humanDecisionLabel(action) {
   })[String(action)] || "待人工决定";
 }
 
+function versionRoleLabel(role) {
+  return ({
+    original: "原始导入",
+    observed_variant: "观察版本"
+  })[String(role)] || "上传版本";
+}
+
+function versionNodeLabel(node) {
+  const version = state.activeCaseRecord?.versions?.find((item) => item.version_id === node?.version_id);
+  return version
+    ? `${versionRoleLabel(version.role)} / ${shortVersionId(version.version_id)}`
+    : shortVersionId(node?.version_id || node?.node_id || "MEDIA");
+}
+
+function shortVersionId(versionId) {
+  const value = String(versionId || "MEDIA");
+  return value.startsWith("sg_ver_") ? `V-${value.slice(-6).toUpperCase()}` : value.replace(/^media:/, "").slice(-14).toUpperCase();
+}
+
+function provenanceRelationshipLabel(relationship) {
+  return ({
+    received_from: "接收自",
+    derived_from: "衍生自",
+    captured_from: "采集自",
+    published_at: "发布于"
+  })[String(relationship)] || String(relationship || "关联");
+}
+
+function priorityLabel(priority) {
+  return ({ urgent: "紧急", high: "高", normal: "普通", low: "低" })[String(priority)] || "普通";
+}
+
+function caseStatusLabel(status) {
+  return ({
+    awaiting_review: "待人工复核",
+    awaiting_source: "等待来源材料",
+    escalated: "已升级复核",
+    held: "暂缓发布",
+    closed_allowed: "已允许使用",
+    sealed: "已签封"
+  })[String(status)] || String(status || "待处理");
+}
+
+function taskStatusLabel(status) {
+  return status === "completed" ? "DONE" : "OPEN";
+}
+
+function caseIsOverdue(record) {
+  if (!record || ["sealed", "closed_allowed"].includes(record.status)) return false;
+  const due = Date.parse(record.workflow?.sla_due_at || "");
+  return Number.isFinite(due) && due < Date.now();
+}
+
+function formatSla(value, status) {
+  if (!value) return "NO SLA";
+  if (["sealed", "closed_allowed"].includes(status)) return "CLOSED";
+  const due = Date.parse(value);
+  if (!Number.isFinite(due)) return "NO SLA";
+  const remaining = due - Date.now();
+  const absolute = Math.abs(remaining);
+  const hours = Math.floor(absolute / 3_600_000);
+  const minutes = Math.floor((absolute % 3_600_000) / 60_000);
+  return `${remaining < 0 ? "OVERDUE" : "DUE"} ${hours ? `${hours}H ` : ""}${minutes}M`;
+}
+
 function feedbackOutcomeLabel(outcome) {
   return ({
     confirmed_real: "确认真实",
@@ -2249,12 +2572,6 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatCountdown(seconds) {
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `T-${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
 
 function clamp(value, minimum, maximum) {

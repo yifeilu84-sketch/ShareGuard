@@ -16,6 +16,7 @@
       this.baseUrl = normalizeBaseUrl(baseUrl);
       this.username = "";
       this.password = "";
+      this.reviewToken = "";
     }
 
     setCredentials(username, password) {
@@ -28,10 +29,20 @@
       this.password = "";
     }
 
+    setReviewToken(token) {
+      this.reviewToken = String(token || "").trim();
+    }
+
+    clearReviewToken() {
+      this.reviewToken = "";
+    }
+
     async request(path, options = {}) {
       const headers = new Headers(options.headers || {});
       headers.set("Accept", options.accept || "application/json");
-      if (this.username && this.password) {
+      if (options.reviewAccess && this.reviewToken) {
+        headers.set("Authorization", `Bearer ${this.reviewToken}`);
+      } else if (this.username && this.password) {
         headers.set("Authorization", basicAuthorization(this.username, this.password));
       }
       const response = await fetch(this.url(path), {
@@ -43,6 +54,13 @@
         mode: this.baseUrl ? "cors" : "same-origin",
         referrerPolicy: "no-referrer"
       });
+      if (response.ok && options.responseType === "blob") {
+        return {
+          blob: await response.blob(),
+          sha256: String(response.headers.get("X-ShareGuard-Media-SHA256") || "").toLowerCase(),
+          contentDisposition: String(response.headers.get("Content-Disposition") || "")
+        };
+      }
       const text = await response.text();
       let payload = null;
       if (text) {
@@ -102,8 +120,14 @@
       return this.request("/v1/analyze", { method: "POST", headers, body });
     }
 
-    listCases() {
-      return this.request("/v1/cases");
+    listCases(filters = {}) {
+      const query = new URLSearchParams();
+      if (filters.status) query.set("status", String(filters.status));
+      if (filters.priority) query.set("priority", String(filters.priority));
+      if (filters.cursor !== undefined && filters.cursor !== null) query.set("cursor", String(filters.cursor));
+      if (filters.limit) query.set("limit", String(filters.limit));
+      const suffix = query.toString() ? `?${query}` : "";
+      return this.request(`/v1/cases${suffix}`);
     }
 
     getCase(caseId) {
@@ -133,6 +157,61 @@
       return this.postCaseCommand(caseId, "feedback", feedback);
     }
 
+    updateWorkflow(caseId, workflow) {
+      return this.postCaseCommand(caseId, "workflow", workflow);
+    }
+
+    addComment(caseId, comment) {
+      return this.postCaseCommand(caseId, "comments", comment);
+    }
+
+    issueReviewGrant(caseId, grant) {
+      return this.postCaseCommand(caseId, "review-grants", grant);
+    }
+
+    revokeReviewGrant(caseId, grantId) {
+      const grant = String(grantId || "");
+      if (!/^sg_grant_[0-9a-f]{32}$/.test(grant)) throw new TypeError("Invalid review grant id.");
+      return this.postCaseCommand(caseId, `review-grants/${encodeURIComponent(grant)}/revoke`, {});
+    }
+
+    getCaseMedia(caseId, versionId) {
+      return this.request(
+        `/v1/cases/${casePath(caseId)}/versions/${versionPath(versionId)}/media`,
+        { responseType: "blob", requireJson: false }
+      );
+    }
+
+    getReviewCase() {
+      return this.request("/v1/review/case", { reviewAccess: true });
+    }
+
+    addReviewComment(comment) {
+      return this.request("/v1/review/comments", {
+        method: "POST",
+        reviewAccess: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(comment || {})
+      });
+    }
+
+    replaceReviewAnnotations(versionId, annotations) {
+      return this.request("/v1/review/annotations", {
+        method: "POST",
+        reviewAccess: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version_id: versionPath(versionId), annotations })
+      });
+    }
+
+    getReviewMedia(versionId) {
+      return this.request(`/v1/review/media/${versionPath(versionId)}`, {
+        reviewAccess: true,
+        responseType: "blob",
+        requireJson: false
+      });
+    }
+
     sealCase(caseId) {
       return this.postCaseCommand(caseId, "seal", {});
     }
@@ -157,6 +236,12 @@
   function casePath(caseId) {
     const value = String(caseId || "").trim();
     if (!/^sg_case_[0-9a-f]{32}$/.test(value)) throw new TypeError("Invalid case id.");
+    return encodeURIComponent(value);
+  }
+
+  function versionPath(versionId) {
+    const value = String(versionId || "").trim();
+    if (!/^sg_ver_[0-9a-f]{32}$/.test(value)) throw new TypeError("Invalid version id.");
     return encodeURIComponent(value);
   }
 

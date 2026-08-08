@@ -2,8 +2,11 @@
 
 This Worker provides the authenticated ShareGuard control plane: inference
 proxying, per-client quotas, durable cases, hash-linked events, operational
-metrics, trusted evidence sealing, and public trust-root metadata. It does not
-persist uploaded media bytes.
+metrics, workflow state, scoped review access, encrypted private-media custody,
+trusted evidence sealing, and public trust-root metadata. Uploaded media is
+encrypted with AES-256-GCM before it is written to the private R2 bucket; the
+Durable Object case record stores custody metadata and the plaintext SHA-256,
+not plaintext media bytes.
 
 ## Secret Boundary
 
@@ -13,6 +16,8 @@ The following values are Cloudflare secrets and must never enter Git:
 - `EDGE_SHARED_SECRET`
 - `EDGE_AUTH_HMAC`
 - `SGD_SIGNING_PRIVATE_JWK`
+- `MEDIA_ENCRYPTION_KEY_B64`
+- `REVIEW_TOKEN_SECRET`
 
 The signing public key, key ID, issuer, rate limits, and allowed browser origin
 are non-secret deployment configuration.
@@ -49,6 +54,34 @@ npx wrangler deploy
 
 Verify `/v1/trust-root` returns the expected public key ID before issuing a
 production package.
+
+## Private Media And Review Access
+
+Production requires the R2 bucket configured as `MEDIA_BUCKET` and a 32-byte
+base64 media-encryption key in `MEDIA_ENCRYPTION_KEY_B64`. The key version is
+recorded in custody metadata so future rotation can be performed without
+pretending older ciphertext used the new key. `MEDIA_CUSTODY_REQUIRED=true`
+causes analysis to fail closed if encrypted persistence cannot be completed.
+
+Case owners can issue expiring reviewer grants. Review tokens are HMAC signed
+with `REVIEW_TOKEN_SECRET`, are restricted to one owner and one case, and are
+placed in the URL fragment so they are not sent as a normal page URL. A scoped
+reviewer can read that case and its protected media and can add comments and
+human annotations. Owner routes, other cases, workflow changes, decisions,
+sealing, and deletion remain unavailable. Revocation is checked against the
+current case record on every scoped request.
+
+The formal site compares only media versions that were actually uploaded into
+the case. It never turns a generated transform into an observed propagation
+event, a verified provenance node, or a reconstructed original.
+
+## SGD v3 Evidence
+
+The seal route produces a server-signed ShareGuard Evidence Package v3. It
+contains the immutable case snapshot, event chain, workflow and task state,
+provenance graph, media manifest, and eligible embedded media. The browser may
+add local passphrase encryption with AES-GCM and PBKDF2 after receiving the
+signed package. The static verifier supports v3 and retained legacy v2 packages.
 
 ## Key Rotation
 

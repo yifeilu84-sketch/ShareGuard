@@ -77,6 +77,12 @@
             </div>
             <div class="register-actions">
               <span><i class="state-block credible"></i><b>持久案件</b></span>
+              <label class="queue-filter" for="caseStatusFilter"><span>状态</span><select id="caseStatusFilter">
+                <option value="">全部</option><option value="awaiting_review">待复核</option><option value="awaiting_source">待来源</option><option value="escalated">已升级</option><option value="held">暂缓</option><option value="closed_allowed">已放行</option><option value="sealed">已签封</option>
+              </select></label>
+              <label class="queue-filter" for="casePriorityFilter"><span>优先级</span><select id="casePriorityFilter">
+                <option value="">全部</option><option value="urgent">紧急</option><option value="high">高</option><option value="normal">普通</option><option value="low">低</option>
+              </select></label>
               <button id="caseRefreshButton" class="text-command" type="button">刷新数据</button>
             </div>
           </header>
@@ -111,6 +117,7 @@
           <output id="quarantineCount">00</output>
           </header>
           <div id="casePicker" class="quarantine-stack"></div>
+          <button id="caseLoadMoreButton" class="queue-load-more" type="button" hidden>加载更多案件</button>
         </aside>
       </section>
 
@@ -155,23 +162,24 @@
           </div>
 
           <div id="comparisonControl" class="comparison-control" hidden>
-            <span>GENERATED ROBUSTNESS VIEW</span>
-            <label for="compareRange">本图衍生视图对比</label>
-            <input id="compareRange" type="range" min="8" max="92" value="52" aria-label="对比本次上传影像与系统生成的鲁棒性视图" disabled>
-            <span>UPLOADED IMAGE</span>
+            <span>当前版本</span>
+            <label for="compareRange">真实上传版本对比</label>
+            <input id="compareRange" type="range" min="8" max="92" value="52" aria-label="对比案件中的原始导入与当前真实上传版本" disabled>
+            <span>原始导入</span>
           </div>
 
-          <div id="viewGrid" class="evidence-versions" aria-label="本图衍生鲁棒性视图"></div>
+          <div id="viewGrid" class="evidence-versions" aria-label="案件真实上传版本"></div>
           <div class="case-toolband" aria-label="案件版本与标注工具">
-            <label id="versionImportButton" class="text-command" for="versionInput">追加观察版本</label>
+            <button id="scopedReviewReturnButton" class="text-command scoped-only" type="button">返回审查意见</button>
+            <label id="versionImportButton" class="text-command owner-only" for="versionInput">追加观察版本</label>
             <input id="versionInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp">
-            <label id="localMediaButton" class="text-command" for="localMediaInput">关联本地原件</label>
+            <label id="localMediaButton" class="text-command" for="localMediaInput">本地文件核对</label>
             <input id="localMediaInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp">
             <button id="annotationEditButton" class="text-command" type="button" aria-pressed="false">框选人工标注</button>
             <label class="annotation-note-field" for="annotationNote"><span>标注说明</span><input id="annotationNote" type="text" maxlength="500" placeholder="为新框选或选中标注填写说明"></label>
             <button id="annotationSaveButton" class="text-command" type="button">保存标注</button>
             <button id="annotationClearButton" class="text-command danger" type="button">删除选中</button>
-            <button id="caseDeleteButton" class="text-command danger" type="button" disabled>删除未签封案件</button>
+            <button id="caseDeleteButton" class="text-command danger owner-only" type="button" disabled>删除未签封案件</button>
           </div>
           <p id="fileMeta" class="file-meta" aria-live="polite">尚未导入影像</p>
         </section>
@@ -194,6 +202,23 @@
             <div><dt data-i18n="decision.action">建议动作</dt><dd id="recommendedAction">等待真实模型结果</dd></div>
           </dl>
 
+          <section class="workflow-register owner-only" aria-labelledby="workflowTitle">
+            <div class="subsection-heading">
+              <h3 id="workflowTitle">案件分诊</h3>
+              <span id="workflowState">NO CASE</span>
+            </div>
+            <dl class="workflow-summary">
+              <div><dt>SLA DUE</dt><dd id="workflowDue">—</dd></div>
+              <div><dt>OPEN TASKS</dt><dd id="workflowOpenCount">0</dd></div>
+            </dl>
+            <div class="workflow-controls">
+              <label for="workflowPriority"><span>优先级</span><select id="workflowPriority"><option value="urgent">紧急</option><option value="high">高</option><option value="normal">普通</option><option value="low">低</option></select></label>
+              <label for="workflowAssignee"><span>负责人</span><input id="workflowAssignee" type="text" maxlength="120" placeholder="姓名或工作组"></label>
+              <button id="workflowSaveButton" class="text-command" type="button">更新分诊</button>
+            </div>
+            <div id="workflowTasks" class="workflow-tasks" aria-live="polite"></div>
+          </section>
+
           <section class="machine-testimony" aria-labelledby="testimonyTitle">
             <h3 id="testimonyTitle" data-i18n="decision.testimony">机器证词</h3>
             <p id="machineNarrative">尚未调用模型。正式站不会使用样例证词补全真实结果。</p>
@@ -206,23 +231,26 @@
               <span id="provenanceStatus">NO SOURCE DATA</span>
             </div>
             <div id="provenanceBody" class="capability-empty">未提供来源或传播链路数据，系统不会生成虚构拓扑。</div>
-            <form id="provenanceForm" class="provenance-form">
+            <form id="provenanceForm" class="provenance-form owner-only">
+              <label for="provenanceTargetVersion"><span>关联版本</span><select id="provenanceTargetVersion" required></select></label>
+              <label for="provenanceRelationship"><span>关系</span><select id="provenanceRelationship"><option value="received_from">接收自</option><option value="derived_from">衍生自</option><option value="captured_from">采集自</option><option value="published_at">发布于</option></select></label>
               <label for="provenanceChannel"><span>来源渠道</span><input id="provenanceChannel" type="text" maxlength="120" required placeholder="例如：记者原始投稿"></label>
               <label for="provenanceUrl"><span>来源 URL</span><input id="provenanceUrl" type="url" maxlength="500" placeholder="https://"></label>
               <label for="provenanceCapturedAt"><span>取得时间</span><input id="provenanceCapturedAt" type="datetime-local"></label>
+              <label for="provenanceDigest"><span>来源 SHA-256</span><input id="provenanceDigest" type="text" maxlength="64" pattern="[0-9A-Fa-f]{64}" placeholder="可选；精确匹配时可验证摘要"></label>
               <label for="provenanceNote"><span>核查备注</span><textarea id="provenanceNote" rows="2" maxlength="1000"></textarea></label>
               <button class="text-command" type="submit">记录声明来源</button>
-              <small>该记录来自人工声明，状态始终标记为 DECLARED / UNVERIFIED。</small>
+              <small>未提供匹配摘要的来源保持 DECLARED / UNVERIFIED；仅精确 SHA-256 匹配标记为 DIGEST VERIFIED。</small>
             </form>
           </section>
 
-          <div class="decision-actions">
+          <div class="decision-actions owner-only">
             <button id="forceReleaseButton" class="button secondary" type="button" disabled>记录人工决定</button>
             <button id="feedbackButton" class="button secondary" type="button" disabled>补录结果反馈</button>
             <button id="sealButton" class="button primary" type="button" data-i18n="decision.seal" disabled>签封并导出</button>
           </div>
 
-          <div class="report-actions" aria-label="报告操作" data-i18n-aria-label="report.actionsAria">
+          <div class="report-actions owner-only" aria-label="报告操作" data-i18n-aria-label="report.actionsAria">
             <button id="saveHtmlReportButton" type="button" data-i18n="report.save">保存 HTML</button>
             <button id="printReportButton" type="button" data-i18n="report.print">打印 / PDF</button>
             <button id="downloadJsonButton" type="button" data-i18n="report.download">下载 JSON</button>
@@ -271,13 +299,26 @@
         </header>
         <div class="reviewer-layout">
           <figure>
-            <img id="reviewerImage" alt="待生成的受控审查版本" hidden>
+            <img id="reviewerImage" alt="案件受保护媒体" hidden>
             <figcaption data-i18n="review.figure">争议影像 / 受控副本 / 不含模型内部参数</figcaption>
           </figure>
           <section class="reviewer-decision">
             <span>EDITORIAL DECISION</span>
             <h2 id="reviewerVerdict">NO MODEL RESULT</h2>
-            <p id="reviewerNarrative">导入影像并取得真实模型结果后，可生成受控审查视图。</p>
+            <p id="reviewerNarrative">打开持久案件后，可在受限权限内查看媒体、评论并提交人工标注。</p>
+            <section id="reviewGrantPanel" class="review-grant-panel owner-only" aria-labelledby="reviewGrantTitle">
+              <div class="subsection-heading"><h3 id="reviewGrantTitle">限时审查权限</h3><span>CASE SCOPED</span></div>
+              <form id="reviewGrantForm">
+                <label for="reviewerName"><span>审查人</span><input id="reviewerName" type="text" maxlength="120" required placeholder="姓名或角色"></label>
+                <label for="reviewGrantExpiry"><span>有效期</span><select id="reviewGrantExpiry"><option value="3600">1 小时</option><option value="86400" selected>24 小时</option><option value="259200">3 天</option><option value="604800">7 天</option></select></label>
+                <button class="button secondary" type="submit">生成受限链接</button>
+              </form>
+              <div id="reviewGrantOutput" class="review-grant-output" hidden>
+                <label for="reviewGrantLink">一次性交接链接</label>
+                <div><input id="reviewGrantLink" type="text" readonly><button id="copyReviewGrantButton" type="button">复制</button></div>
+              </div>
+              <div id="reviewGrantList" class="review-grant-list" aria-live="polite"></div>
+            </section>
             <form id="reviewForm">
               <label for="reviewerComment" data-i18n="review.note">法律或编辑旁注</label>
               <textarea id="reviewerComment" rows="5" maxlength="800" required></textarea>
@@ -292,7 +333,7 @@
     <footer class="system-footer">
       <span>SHAREGUARD / SCREENING GATEWAY ACTIVE</span>
       <span id="footerCase">CASE #PENDING</span>
-      <button id="openReviewerButton" type="button" data-i18n="review.open">生成受控审查视图</button>
+      <button id="openReviewerButton" type="button" data-i18n="review.open">审查协作</button>
     </footer>
   </div>
 

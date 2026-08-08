@@ -58,6 +58,9 @@ function corsHeaders(origin, env) {
     ),
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Origin": origin,
+    "Access-Control-Expose-Headers": (
+      "Retry-After, X-ShareGuard-Media-SHA256, Content-Disposition"
+    ),
     "Access-Control-Max-Age": "600",
     Vary: "Origin",
   };
@@ -1057,24 +1060,6 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
     if (route.kind === "review_grant") {
       return await manageReviewGrant(request, env, actorId, origin);
     }
-    if (route.kind === "review_grant") {
-      return jsonResponse(
-        503,
-        "review_access_unavailable",
-        "Review access is temporarily unavailable.",
-        origin,
-        env,
-      );
-    }
-    if (route.kind === "media") {
-      return jsonResponse(
-        503,
-        "media_custody_unavailable",
-        "Private media is temporarily unavailable.",
-        origin,
-        env,
-      );
-    }
     if (route.kind === "case_store") {
       if (requestUrl.pathname.endsWith("/seal")) {
         return await sealCase(request, env, actorId, origin);
@@ -1158,6 +1143,24 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
         503,
         "case_store_unavailable",
         "Case service is temporarily unavailable.",
+        origin,
+        env,
+      );
+    }
+    if (route.kind === "review_grant") {
+      return jsonResponse(
+        503,
+        "review_access_unavailable",
+        "Review access is temporarily unavailable.",
+        origin,
+        env,
+      );
+    }
+    if (route.kind === "media") {
+      return jsonResponse(
+        503,
+        "media_custody_unavailable",
+        "Private media is temporarily unavailable.",
         origin,
         env,
       );

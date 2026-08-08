@@ -107,13 +107,18 @@ field: image
 
 ## 隐私与运行边界
 
-- 默认在内存中处理图片，不持久化原图。
+- 本地 Python 推理服务默认只在内存中处理图片，不持久化原图。
+- 正式 Cloudflare 控制面会在推理成功后，以 AES-256-GCM 加密新案件媒体并写入私有 R2；Durable Object 只保存摘要、密文托管元数据、结果和审计事件。
+- 正式浏览器只通过鉴权 Worker 取回媒体，并在显示前重新计算 SHA-256；R2 bucket 不公开，媒体密钥与审查链接签名密钥只存在于 Cloudflare Secret。
+- 受限审查链接按单一案件授权、可设置期限并可即时撤销；审查者不能读取案件队列、修改工作流、作出最终决定、签封或删除案件。
 - 默认禁止跨域；只有精确命中 `SHAREGUARD_ALLOWED_ORIGINS` 才返回 CORS 许可头，预检不会绕过实际接口鉴权。
 - 单图默认上限 10 MiB、2500 万像素，仅接受 JPEG、PNG 和 WebP。
 - GPU 默认只并行执行一个推理任务，等待队列默认最多八个请求。
 - HTTP 请求线程默认最多十六个，避免图片解码流量无限创建线程。
 - `/v1/health` 只表示进程存活，`/v1/ready` 表示模型服务可接收任务。
 - 日志只记录请求 ID、状态和错误类别，不记录图片内容、Token 或模型内部输出。
+
+正式控制面的 P0 配置还必须包含 `MEDIA_BUCKET`、`MEDIA_ENCRYPTION_KEY_B64`、`REVIEW_TOKEN_SECRET` 与 `MEDIA_CUSTODY_REQUIRED=true`。密钥只能通过 `wrangler secret put` 安装，不得写入 `wrangler.toml`、环境模板、GitHub Actions 日志或仓库历史。
 
 ## 上线前检查
 

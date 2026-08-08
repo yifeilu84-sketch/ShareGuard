@@ -43,11 +43,19 @@ notes entered by a reviewer are labelled `DECLARED / UNVERIFIED`.
 
 ## Data Boundary
 
-Uploaded bytes are processed for inference but are not persisted in the
-Cloudflare case store. The durable record retains the media SHA-256 digest,
-image metadata, results, human actions, and audit events. Reopening an image
-requires the reviewer to reattach a local file whose digest matches the stored
-version.
+Uploaded bytes are processed by the protected inference service and, for new
+production cases, encrypted with AES-256-GCM before being stored in a private
+Cloudflare R2 bucket. The media-encryption key is a Worker secret and is not
+stored in Git, R2, the Durable Object, or the browser. The durable case record
+retains the plaintext media SHA-256, image metadata, custody metadata, results,
+human actions, and hash-linked audit events.
+
+Authorized owners and unexpired case-scoped reviewers can retrieve the
+decrypted bytes through the Worker. The browser recomputes SHA-256 and refuses
+to display a response that does not match the case version. R2 objects are not
+public and are deleted when an unsealed case is deleted. Historical records
+created before encrypted custody may remain `detached_digest_only`; those can
+be viewed as records and can use a locally reattached digest-matching file.
 
 ## Research Result Boundary
 

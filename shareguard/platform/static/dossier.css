@@ -48,6 +48,21 @@ body.reviewer-mode .system-footer {
   display: none;
 }
 
+body.scoped-review-mode .command-bar,
+body.scoped-review-mode .threat-strip,
+body.scoped-review-mode .system-footer,
+body.scoped-review-mode .owner-only {
+  display: none !important;
+}
+
+.scoped-only {
+  display: none !important;
+}
+
+body.scoped-review-mode .scoped-only {
+  display: inline-grid !important;
+}
+
 button,
 input,
 textarea {
@@ -592,6 +607,56 @@ p {
 
 .quarantine-card[data-status="sealed"] {
   border-color: var(--credible);
+}
+
+.quarantine-card[data-priority="urgent"] {
+  border-left: 4px solid var(--risk);
+}
+
+.quarantine-card[data-priority="high"] {
+  border-left: 4px solid var(--caution);
+}
+
+.quarantine-card.overdue {
+  background: #FFF7F5;
+  border-color: var(--risk);
+}
+
+.quarantine-card.overdue time {
+  color: var(--risk);
+  font-weight: 700;
+}
+
+.queue-filter {
+  display: grid;
+  grid-template-columns: auto minmax(82px, 1fr);
+  align-items: center;
+  min-height: 34px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.queue-filter span {
+  padding: 0 7px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.queue-filter select {
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  border-left: 1px solid var(--line-soft);
+  background: var(--white);
+  font-size: 10px;
+}
+
+.queue-load-more {
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
+  font-family: var(--font-mono);
+  font-size: 9px;
 }
 
 .quarantine-card.active,
@@ -1336,6 +1401,7 @@ p {
 }
 
 .provenance-form input,
+.provenance-form select,
 .provenance-form textarea,
 .release-dialog select,
 .release-dialog textarea {
@@ -1703,6 +1769,99 @@ p {
   font-size: 13px;
 }
 
+.review-grant-panel {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.review-grant-panel form {
+  grid-template-columns: minmax(140px, 1fr) minmax(110px, 0.7fr) auto;
+  align-items: end;
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.review-grant-panel form label {
+  display: grid;
+  gap: 5px;
+}
+
+.review-grant-panel form label > span,
+.review-grant-output > label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.review-grant-panel input,
+.review-grant-panel select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--white);
+  font-size: 11px;
+}
+
+.review-grant-output {
+  margin-top: 12px;
+}
+
+.review-grant-output > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 5px;
+}
+
+.review-grant-output button {
+  border-left: 0;
+}
+
+.review-grant-list {
+  display: grid;
+  gap: 1px;
+  margin-top: 12px;
+  background: var(--line-soft);
+}
+
+.review-grant-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.review-grant-list article > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.review-grant-list article[data-active="true"] > div span {
+  color: var(--credible);
+}
+
+.review-grant-list article button {
+  grid-column: 1 / -1;
+  min-height: 32px;
+  font-size: 9px;
+}
+
+body.scoped-review-mode .dossier-view {
+  min-height: 100vh;
+}
+
+body.scoped-review-mode .reviewer-header button {
+  display: inline-flex;
+}
+
 .system-footer {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -1839,6 +1998,158 @@ dialog::backdrop {
 
 .seal-result a {
   padding: 11px 0;
+}
+
+.provenance-graph-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.provenance-graph-list article {
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.provenance-graph-list article[data-verification="digest_verified"] {
+  border-left: 4px solid var(--credible);
+}
+
+.provenance-graph-list article[data-verification="declared_unverified"] {
+  border-left: 4px solid var(--caution);
+}
+
+.provenance-graph-list article > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.provenance-graph-list article > div b {
+  padding: 2px 6px;
+  border-right: 1px solid var(--line-soft);
+  border-left: 1px solid var(--line-soft);
+}
+
+.provenance-graph-list small,
+.provenance-graph-list time,
+.provenance-graph-list a {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.provenance-graph-list p {
+  margin: 7px 0 0;
+  font-size: 11px;
+}
+
+.workflow-register {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.workflow-register h3,
+.review-grant-panel h3 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.workflow-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 12px 0 0;
+  border: 1px solid var(--line-soft);
+}
+
+.workflow-summary > div {
+  min-width: 0;
+  padding: 8px;
+}
+
+.workflow-summary > div + div {
+  border-left: 1px solid var(--line-soft);
+}
+
+.workflow-summary dt,
+.workflow-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.workflow-summary dd {
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.workflow-controls {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.7fr) minmax(130px, 1.3fr) auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.workflow-controls label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.workflow-controls label span {
+  padding: 0 7px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.workflow-controls input,
+.workflow-controls select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px;
+  border: 0;
+  border-left: 1px solid var(--line-soft);
+  background: var(--white);
+  font-size: 10px;
+}
+
+.workflow-tasks {
+  display: grid;
+  gap: 1px;
+  margin-top: 8px;
+  background: var(--line-soft);
+}
+
+.workflow-tasks article {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.workflow-tasks article[data-status="completed"] {
+  color: var(--ink-soft);
+}
+
+.workflow-tasks article[data-status="open"] span {
+  color: var(--risk);
+  font-weight: 700;
 }
 
 .seal-encryption-option,
@@ -2530,6 +2841,11 @@ body.is-analyzing .engine-state .state-block {
     height: min(72vh, 680px);
   }
 
+  .workflow-controls,
+  .review-grant-panel form {
+    grid-template-columns: 1fr;
+  }
+
   .verifier-bar,
   .verifier-main {
     grid-template-columns: 1fr;
@@ -2585,6 +2901,19 @@ body.is-analyzing .engine-state .state-block {
   .reviewer-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .register-actions {
+    flex-wrap: wrap;
+  }
+
+  .queue-filter {
+    flex: 1 1 140px;
+  }
+
+  .workflow-tasks article,
+  .provenance-graph-list article > div {
+    grid-template-columns: 1fr;
   }
 
   .operations-metrics {

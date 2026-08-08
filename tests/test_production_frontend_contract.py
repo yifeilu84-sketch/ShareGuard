@@ -16,7 +16,9 @@ class ProductionFrontendContractTests(unittest.TestCase):
         for method in [
             "analyze", "listCases", "getCase", "deleteCase", "recordDecision",
             "replaceAnnotations", "declareProvenance", "recordFeedback", "sealCase",
-            "getMetrics", "getTrustRoot", "health", "ready",
+            "updateWorkflow", "addComment", "issueReviewGrant", "revokeReviewGrant",
+            "getCaseMedia", "getReviewCase", "getReviewMedia", "addReviewComment",
+            "replaceReviewAnnotations", "getMetrics", "getTrustRoot", "health", "ready",
         ]:
             self.assertIn(f"{method}(", client)
         self.assertIn("X-ShareGuard-Case-Id", client)
@@ -33,23 +35,81 @@ class ProductionFrontendContractTests(unittest.TestCase):
         for control_id in [
             "caseRefreshButton", "caseDeleteButton", "versionInput", "versionImportButton",
             "provenanceForm", "provenanceChannel", "provenanceUrl", "provenanceCapturedAt",
+            "provenanceRelationship", "provenanceDigest", "provenanceTargetVersion",
             "annotationEditButton", "annotationNote", "annotationSaveButton",
             "decisionForm", "humanDecisionAction", "humanDecisionReason", "humanDecisionNote",
             "feedbackForm", "feedbackOutcome", "feedbackBasis", "metricsSummary",
+            "caseStatusFilter", "casePriorityFilter", "caseLoadMoreButton",
+            "workflowPriority", "workflowAssignee", "workflowSaveButton", "workflowTasks",
+            "reviewGrantForm", "reviewerName", "reviewGrantExpiry", "reviewGrantLink",
+            "copyReviewGrantButton", "reviewGrantList",
         ]:
             self.assertIn(f'id="{control_id}"', html)
         for behavior in [
             "loadCaseList", "openPersistedCase", "analyzeObservedVersion",
             "submitDeclaredProvenance", "saveReviewerAnnotations",
             "submitHumanDecision", "submitOutcomeFeedback", "loadOperationalMetrics",
+            "loadSelectedVersionMedia", "renderWorkflow", "submitWorkflowUpdate",
+            "loadScopedReview", "submitReviewGrant", "revokeReviewGrant",
+            "renderComments", "provenanceGraphView",
         ]:
             self.assertIn(f"function {behavior}", script)
         for api_call in [
             ".listCases(", ".getCase(", ".deleteCase(", ".replaceAnnotations(",
             ".declareProvenance(", ".recordDecision(", ".recordFeedback(", ".getMetrics(",
+            ".getCaseMedia(", ".updateWorkflow(", ".issueReviewGrant(",
+            ".revokeReviewGrant(", ".getReviewCase(", ".getReviewMedia(",
+            ".addReviewComment(",
         ]:
             self.assertIn(api_call, script)
         self.assertNotIn("localStorage", script)
+
+    def test_formal_workbench_uses_private_media_and_real_uploaded_versions_only(self):
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+        translations = (STATIC / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn("apiClient.getCaseMedia", script)
+        self.assertIn("apiClient.getReviewMedia", script)
+        self.assertIn("sha256Blob", script)
+        self.assertIn("media_sha256", script)
+        self.assertIn("object-fit: contain", (STATIC / "dossier.css").read_text(encoding="utf-8"))
+        self.assertIn("真实上传版本对比", html)
+        self.assertIn("原始导入", html)
+        self.assertIn("当前版本", html)
+        for false_claim in [
+            "GENERATED ROBUSTNESS VIEW",
+            "本图衍生视图对比",
+            "系统生成的鲁棒性视图",
+            "服务器仅保存媒体摘要",
+            "影像原件不在服务器保存",
+            "重建图像",
+            "reconstructed image",
+            "GENERATED STRESS VIEW",
+        ]:
+            self.assertNotIn(false_claim, html)
+            self.assertNotIn(false_claim, script)
+            self.assertNotIn(false_claim, translations)
+
+    def test_scoped_review_token_stays_in_fragment_and_has_restricted_ui(self):
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+        worker = (ROOT / "deploy" / "cloudflare-worker" / "src" / "index.js").read_text(encoding="utf-8")
+
+        self.assertIn("review_token", script)
+        self.assertIn("location.hash", script)
+        self.assertIn("apiClient.setReviewToken", script)
+        self.assertIn("scoped-review-mode", script)
+        self.assertIn("/#review_token=", worker)
+        self.assertNotIn("?review_token=", worker)
+
+    def test_provenance_ui_uses_evidence_graph_without_invented_hops(self):
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+
+        self.assertIn("record.provenance_graph", script)
+        self.assertIn("verification_status", script)
+        self.assertIn("digest_verified", script)
+        self.assertIn("declared_unverified", script)
+        self.assertNotIn("VERIFIED HOPS", script)
 
     def test_reopened_human_annotations_and_decisions_remain_legible(self):
         script = (STATIC / "dossier.js").read_text(encoding="utf-8")
@@ -107,7 +167,8 @@ class ProductionFrontendContractTests(unittest.TestCase):
             self.assertNotIn(forbidden_fallback, script)
 
         self.assertIn("renderAnalysisUnavailable", script)
-        self.assertIn("view.image_data_url || view.data_url", script)
+        self.assertIn("state.versionMedia.get", script)
+        self.assertIn("uploaded_version", script)
         for fixed_demo_finding in [
             "case.geopolitical",
             "case.newsroom",

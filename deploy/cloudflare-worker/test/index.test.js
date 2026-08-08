@@ -323,6 +323,7 @@ test("approved browser preflight permits deleting an unsealed case", async () =>
   assert.equal(response.status, 204);
   assert.match(response.headers.get("Access-Control-Allow-Methods"), /DELETE/);
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), env.ALLOWED_ORIGIN);
+  assert.match(response.headers.get("Access-Control-Expose-Headers"), /X-ShareGuard-Media-SHA256/);
 });
 
 
@@ -557,6 +558,49 @@ test("case-scoped reviewer links permit comments but not owner routes and revoke
     runtime,
   );
   assert.equal(revokedResponse.status, 401);
+});
+
+
+test("review grant issuance fails closed when the review signing secret is unavailable", async () => {
+  const ownerId = `sg_actor_${createHmac("sha256", EDGE_SHARED_SECRET)
+    .update("shareguard-actor:test")
+    .digest("hex")
+    .slice(0, 32)}`;
+  const record = await createCase({
+    request_id: "sg_req_review_secret",
+    media_sha256: "e".repeat(64),
+    engine_release: "shareguard-screening-2026.08",
+    detector_engine: "shareguard-protected-screening-engine",
+    decision_layer: "shareguard-editorial-policy-v2",
+    machine_recommendation: "review",
+    decision_label: "需要人工复核",
+    risk_level: "high",
+    model_score: 0.8,
+    score_kind: "uncalibrated_ai_generation_score",
+    decision_margin: 0.6,
+    latency_ms: 300,
+    image: { width: 10, height: 10, format: "JPEG" },
+    report: { report_id: "SG-REVIEW-SECRET" },
+  }, {
+    caseId: `sg_case_${"9".repeat(32)}`,
+    versionId: `sg_ver_${"a".repeat(32)}`,
+    actorId: ownerId,
+  });
+  const store = realCaseStoreBinding(ownerId, record);
+  const response = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${record.case_id}/review-grants`, {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.93",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ reviewer_name: "External counsel", expires_in_seconds: 3600 }),
+    }),
+    { ...env, CASE_STORE: store.binding },
+  );
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, "review_access_unavailable");
 });
 
 
