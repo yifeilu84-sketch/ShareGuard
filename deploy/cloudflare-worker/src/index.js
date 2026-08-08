@@ -22,6 +22,10 @@ const EDGE_CLIENT_ID_HEADER = "X-ShareGuard-Client-Id";
 const LEGACY_EDGE_SECRET_HEADER = "X-ShareGuard-Edge-Secret";
 const EDGE_TIMESTAMP_HEADER = "X-ShareGuard-Edge-Timestamp";
 const EDGE_SIGNATURE_HEADER = "X-ShareGuard-Edge-Signature";
+const CASE_ID_HEADER = "X-ShareGuard-Case-Id";
+const VERSION_ROLE_HEADER = "X-ShareGuard-Version-Role";
+const CASE_TITLE_HEADER = "X-ShareGuard-Case-Title";
+const CASE_TITLE_B64_HEADER = "X-ShareGuard-Case-Title-B64";
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
@@ -34,9 +38,10 @@ function corsHeaders(origin, env) {
   return {
     "Access-Control-Allow-Headers": (
       "Authorization, Content-Type, X-File-Name, X-ShareGuard-Case-Id, " +
-      "X-ShareGuard-Version-Role, X-ShareGuard-Case-Title"
+      "X-ShareGuard-Version-Role, X-ShareGuard-Case-Title, " +
+      "X-ShareGuard-Case-Title-B64"
     ),
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Max-Age": "600",
     Vary: "Origin",
@@ -110,6 +115,22 @@ function decodeBasicUsername(headerValue) {
   } catch {
     return "";
   }
+}
+
+
+function decodeCaseTitle(headers) {
+  const encoded = String(headers.get(CASE_TITLE_B64_HEADER) || "").trim();
+  if (encoded) {
+    if (encoded.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+      throw new Error("invalid encoded case title");
+    }
+    const standard = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = standard + "=".repeat((4 - (standard.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+  }
+  return String(headers.get(CASE_TITLE_HEADER) || "").trim();
 }
 
 
@@ -494,7 +515,11 @@ function upstreamRequest(request, modalOrigin, edgeIdentity) {
       normalized === EDGE_CLIENT_ID_HEADER.toLowerCase() ||
       normalized === LEGACY_EDGE_SECRET_HEADER.toLowerCase() ||
       normalized === EDGE_TIMESTAMP_HEADER.toLowerCase() ||
-      normalized === EDGE_SIGNATURE_HEADER.toLowerCase()
+      normalized === EDGE_SIGNATURE_HEADER.toLowerCase() ||
+      normalized === CASE_ID_HEADER.toLowerCase() ||
+      normalized === VERSION_ROLE_HEADER.toLowerCase() ||
+      normalized === CASE_TITLE_HEADER.toLowerCase() ||
+      normalized === CASE_TITLE_B64_HEADER.toLowerCase()
     ) {
       forwarded.headers.delete(key);
     }
@@ -521,7 +546,7 @@ function proxiedResponse(response, origin, env) {
 }
 
 
-async function persistAnalysis(request, response, env, actorId, origin) {
+async function persistAnalysis(request, response, env, actorId, origin, caseTitle) {
   if (!response.ok) {
     return proxiedResponse(response, origin, env);
   }
@@ -539,17 +564,15 @@ async function persistAnalysis(request, response, env, actorId, origin) {
   }
 
   const requestedCaseId = String(
-    request.headers.get("X-ShareGuard-Case-Id") || "",
+    request.headers.get(CASE_ID_HEADER) || "",
   ).trim().toLowerCase();
   const requestedRole = String(
-    request.headers.get("X-ShareGuard-Version-Role") || "",
+    request.headers.get(VERSION_ROLE_HEADER) || "",
   ).trim().toLowerCase();
   const versionRole = requestedRole || (
     requestedCaseId ? "observed_variant" : "original"
   );
-  const title = String(
-    request.headers.get("X-ShareGuard-Case-Title") || "",
-  ).trim();
+  const title = String(caseTitle || "").trim();
   const fileName = String(
     request.headers.get("X-File-Name") ||
     analysis.report?.subject?.file_name ||
@@ -688,7 +711,19 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
       env.EDGE_SHARED_SECRET,
       [timestamp, request.method, requestUrl.pathname, clientId].join("\n"),
     );
+    let caseTitle = "";
     if (route.kind === "analyze") {
+      try {
+        caseTitle = decodeCaseTitle(request.headers);
+      } catch {
+        return jsonResponse(
+          400,
+          "invalid_case_title",
+          "Case title encoding is invalid.",
+          origin,
+          env,
+        );
+      }
       const quota = await consumeDurableQuota(env, clientId);
       if (!quota.allowed) {
         return jsonResponse(
@@ -706,7 +741,14 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
       upstreamRequest(request, modalOrigin, { clientId, timestamp, signature }),
     );
     if (route.kind === "analyze") {
-      return await persistAnalysis(request, response, env, actorId, origin);
+      return await persistAnalysis(
+        request,
+        response,
+        env,
+        actorId,
+        origin,
+        caseTitle,
+      );
     }
     return proxiedResponse(response, origin, env);
   } catch {

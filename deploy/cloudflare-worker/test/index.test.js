@@ -199,6 +199,27 @@ test("rejects an unapproved browser origin", async () => {
 });
 
 
+test("approved browser preflight permits deleting an unsealed case", async () => {
+  const caseId = `sg_case_${"a".repeat(32)}`;
+  const response = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${caseId}`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: env.ALLOWED_ORIGIN,
+        "Access-Control-Request-Method": "DELETE",
+        "Access-Control-Request-Headers": "authorization,content-type",
+      },
+    }),
+    env,
+    async () => new Response("unexpected"),
+  );
+
+  assert.equal(response.status, 204);
+  assert.match(response.headers.get("Access-Control-Allow-Methods"), /DELETE/);
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), env.ALLOWED_ORIGIN);
+});
+
+
 test("rejects paths and methods outside the public API", async () => {
   const badPath = await handleRequest(
     new Request("https://api.shareguard.systems/internal/config"),
@@ -423,6 +444,42 @@ test("forwards approved requests and strips spoofable identity headers", async (
   assert.equal(ingest.payload.analysis.request_id, "sg_req_test");
   assert.match(ingest.payload.actor_id, /^sg_actor_[0-9a-f]{32}$/);
   assert.equal(ingest.payload.actor_id.includes("test"), false);
+});
+
+
+test("decodes a UTF-8 case title without forwarding case metadata upstream", async () => {
+  const store = persistentCaseStore();
+  let forwarded;
+  const title = "用户导入影像核验";
+  const encodedTitle = Buffer.from(title, "utf8").toString("base64url");
+  const response = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Origin: env.ALLOWED_ORIGIN,
+        Authorization: AUTHORIZATION,
+        "Content-Type": "image/jpeg",
+        "CF-Connecting-IP": "203.0.113.72",
+        "X-ShareGuard-Case-Title-B64": encodedTitle,
+        "X-ShareGuard-Version-Role": "original",
+      },
+      body: new Uint8Array([1]),
+    }),
+    { ...env, CASE_STORE: store.binding },
+    async request => {
+      forwarded = request;
+      return new Response(JSON.stringify({ request_id: "sg_req_title" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  );
+
+  assert.equal(response.status, 200);
+  const ingest = store.calls.find(call => call.path === "/ingest");
+  assert.equal(ingest.payload.title, title);
+  assert.equal(forwarded.headers.get("X-ShareGuard-Case-Title-B64"), null);
+  assert.equal(forwarded.headers.get("X-ShareGuard-Version-Role"), null);
 });
 
 

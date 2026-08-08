@@ -7,6 +7,70 @@ STATIC = ROOT / "shareguard" / "platform" / "static"
 
 
 class ProductionFrontendContractTests(unittest.TestCase):
+    def test_api_client_exposes_complete_persistent_workflow(self):
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        client = (STATIC / "api-client.js").read_text(encoding="utf-8")
+
+        self.assertIn('src="api-client.js"', html)
+        self.assertLess(html.index('src="api-client.js"'), html.index('src="dossier.js"'))
+        for method in [
+            "analyze", "listCases", "getCase", "deleteCase", "recordDecision",
+            "replaceAnnotations", "declareProvenance", "recordFeedback", "sealCase",
+            "getMetrics", "getTrustRoot", "health", "ready",
+        ]:
+            self.assertIn(f"{method}(", client)
+        self.assertIn("X-ShareGuard-Case-Id", client)
+        self.assertIn("X-ShareGuard-Version-Role", client)
+        self.assertIn("X-ShareGuard-Case-Title-B64", client)
+        self.assertIn("function utf8Base64Url", client)
+        self.assertNotIn('headers["X-ShareGuard-Case-Title"] = String(options.title)', client)
+        self.assertNotIn("localStorage", client)
+
+    def test_workbench_exposes_real_case_review_controls(self):
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+
+        for control_id in [
+            "caseRefreshButton", "caseDeleteButton", "versionInput", "versionImportButton",
+            "provenanceForm", "provenanceChannel", "provenanceUrl", "provenanceCapturedAt",
+            "annotationEditButton", "annotationNote", "annotationSaveButton",
+            "decisionForm", "humanDecisionAction", "humanDecisionReason", "humanDecisionNote",
+            "feedbackForm", "feedbackOutcome", "feedbackBasis", "metricsSummary",
+        ]:
+            self.assertIn(f'id="{control_id}"', html)
+        for behavior in [
+            "loadCaseList", "openPersistedCase", "analyzeObservedVersion",
+            "submitDeclaredProvenance", "saveReviewerAnnotations",
+            "submitHumanDecision", "submitOutcomeFeedback", "loadOperationalMetrics",
+        ]:
+            self.assertIn(f"function {behavior}", script)
+        for api_call in [
+            ".listCases(", ".getCase(", ".deleteCase(", ".replaceAnnotations(",
+            ".declareProvenance(", ".recordDecision(", ".recordFeedback(", ".getMetrics(",
+        ]:
+            self.assertIn(api_call, script)
+        self.assertNotIn("localStorage", script)
+
+    def test_reopened_human_annotations_and_decisions_remain_legible(self):
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+
+        self.assertIn('origin: "human_reviewer"', script)
+        self.assertIn("map(normalizePersistedAnnotation)", script)
+        self.assertIn("function normalizePersistedAnnotation", script)
+        self.assertIn("dom.forceReleaseButton.textContent", script)
+        self.assertIn("dom.feedbackButton.textContent", script)
+
+    def test_exports_share_one_canonical_persisted_case_projection(self):
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+
+        self.assertIn("function canonicalCaseExport", script)
+        self.assertIn("case_id", script)
+        self.assertIn("media_sha256", script)
+        self.assertIn("engine_release", script)
+        self.assertIn("human_decision", script)
+        self.assertIn("chain_head", script)
+        self.assertGreaterEqual(script.count("canonicalCaseExport()"), 3)
+
     def test_production_html_contains_no_fixed_case_findings(self):
         html = (STATIC / "index.html").read_text(encoding="utf-8")
 
@@ -110,9 +174,12 @@ class ProductionFrontendContractTests(unittest.TestCase):
 
     def test_production_workbench_requests_server_signed_evidence(self):
         script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+        api_client = (STATIC / "api-client.js").read_text(encoding="utf-8")
         worker = (STATIC / "crypto-worker.js").read_text(encoding="utf-8")
 
-        self.assertIn('/seal', script)
+        self.assertIn('sealCase(caseId)', api_client)
+        self.assertIn('this.postCaseCommand(caseId, "seal", {})', api_client)
+        self.assertIn('apiClient.sealCase(caseId)', script)
         self.assertIn('shareguard.sgd.v2', script)
         self.assertNotIn('ShareGuard-Evidence-Package-1', script)
         self.assertNotIn('crypto.subtle.generateKey', script)

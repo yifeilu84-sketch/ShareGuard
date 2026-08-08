@@ -543,6 +543,7 @@ class PlatformHttpTests(unittest.TestCase):
 
     def test_dossier_static_assets_and_verifier_are_served_locally(self):
         expected = {
+            "/api-client.js": "application/javascript; charset=utf-8",
             "/dossier.css": "text/css; charset=utf-8",
             "/dossier.js": "application/javascript; charset=utf-8",
             "/i18n.js": "application/javascript; charset=utf-8",

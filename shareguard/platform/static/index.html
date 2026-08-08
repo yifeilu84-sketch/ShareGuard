@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="dossier.css">
   <script src="i18n.js" defer></script>
   <script src="runtime-config.js" defer></script>
+  <script src="api-client.js" defer></script>
   <script src="dossier.js" defer></script>
 </head>
 <body>
@@ -74,10 +75,19 @@
               <h1 id="radarTitle" data-i18n="radar.title">全局雷达收件箱</h1>
             </div>
             <div class="register-actions">
-              <span><i class="state-block credible"></i><b data-i18n="radar.allow">静默放行</b></span>
-              <span><i class="state-block risk"></i><b data-i18n="radar.hold">高危拦截</b></span>
+              <span><i class="state-block credible"></i><b>持久案件</b></span>
+              <button id="caseRefreshButton" class="text-command" type="button">刷新数据</button>
             </div>
           </header>
+
+          <dl id="metricsSummary" class="operations-metrics" aria-label="真实运行指标">
+            <div><dt>CASES</dt><dd id="metricCases">—</dd><small>持久案件</small></div>
+            <div><dt>VERSIONS</dt><dd id="metricVersions">—</dd><small>已分析版本</small></div>
+            <div><dt>HUMAN GATE</dt><dd id="metricDecisions">—</dd><small>人工决定</small></div>
+            <div><dt>OVERRIDES</dt><dd id="metricOverrides">—</dd><small>人机差异</small></div>
+            <div><dt>LATENCY</dt><dd id="metricLatency">—</dd><small>中位推理耗时</small></div>
+            <div><dt>SHIFT</dt><dd id="metricShift">—</dd><small>分数分布信号</small></div>
+          </dl>
 
           <div class="waterfall" role="table" aria-label="实时影像分诊记录" data-i18n-aria-label="radar.tableAria">
             <div class="waterfall-head" role="row">
@@ -151,6 +161,17 @@
           </div>
 
           <div id="viewGrid" class="evidence-versions" aria-label="本图衍生鲁棒性视图"></div>
+          <div class="case-toolband" aria-label="案件版本与标注工具">
+            <label id="versionImportButton" class="text-command" for="versionInput">追加观察版本</label>
+            <input id="versionInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp">
+            <label id="localMediaButton" class="text-command" for="localMediaInput">关联本地原件</label>
+            <input id="localMediaInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp">
+            <button id="annotationEditButton" class="text-command" type="button" aria-pressed="false">框选人工标注</button>
+            <label class="annotation-note-field" for="annotationNote"><span>标注说明</span><input id="annotationNote" type="text" maxlength="500" placeholder="为新框选或选中标注填写说明"></label>
+            <button id="annotationSaveButton" class="text-command" type="button">保存标注</button>
+            <button id="annotationClearButton" class="text-command danger" type="button">删除选中</button>
+            <button id="caseDeleteButton" class="text-command danger" type="button" disabled>删除未签封案件</button>
+          </div>
           <p id="fileMeta" class="file-meta" aria-live="polite">尚未导入影像</p>
         </section>
 
@@ -184,10 +205,19 @@
               <span id="provenanceStatus">NO SOURCE DATA</span>
             </div>
             <div id="provenanceBody" class="capability-empty">未提供来源或传播链路数据，系统不会生成虚构拓扑。</div>
+            <form id="provenanceForm" class="provenance-form">
+              <label for="provenanceChannel"><span>来源渠道</span><input id="provenanceChannel" type="text" maxlength="120" required placeholder="例如：记者原始投稿"></label>
+              <label for="provenanceUrl"><span>来源 URL</span><input id="provenanceUrl" type="url" maxlength="500" placeholder="https://"></label>
+              <label for="provenanceCapturedAt"><span>取得时间</span><input id="provenanceCapturedAt" type="datetime-local"></label>
+              <label for="provenanceNote"><span>核查备注</span><textarea id="provenanceNote" rows="2" maxlength="1000"></textarea></label>
+              <button class="text-command" type="submit">记录声明来源</button>
+              <small>该记录来自人工声明，状态始终标记为 DECLARED / UNVERIFIED。</small>
+            </form>
           </section>
 
           <div class="decision-actions">
-            <button id="forceReleaseButton" class="button secondary" type="button" data-i18n="decision.force" disabled>强制放行</button>
+            <button id="forceReleaseButton" class="button secondary" type="button" disabled>记录人工决定</button>
+            <button id="feedbackButton" class="button secondary" type="button" disabled>补录结果反馈</button>
             <button id="sealButton" class="button primary" type="button" data-i18n="decision.seal" disabled>签封并导出</button>
           </div>
 
@@ -268,26 +298,36 @@
   <dialog id="sealDialog" class="seal-dialog" aria-labelledby="sealTitle">
     <form method="dialog" class="dialog-close-row"><button aria-label="关闭签封窗口" data-i18n="seal.close" data-i18n-aria-label="seal.closeAria">关闭</button></form>
     <div class="seal-terminal">
-      <span>SHAREGUARD EVIDENCE SEAL / BROWSER DEMONSTRATOR</span>
+      <span>SHAREGUARD EVIDENCE SEAL / TRUSTED ISSUER</span>
       <h2 id="sealTitle" data-i18n="seal.working">正在生成证据包</h2>
       <pre id="sealLog" aria-live="polite"></pre>
       <div id="sealResult" class="seal-result" hidden>
-        <p data-i18n="seal.notice">浏览器演示签名已完成。生产签封由私有根证书服务完成。</p>
+        <p data-i18n="seal.notice">证据包已由 ShareGuard 受保护签发服务签名，并绑定固定信任根。</p>
         <button id="downloadSgdButton" class="button inverse" type="button" data-i18n="seal.download">下载 .sgd 证据包</button>
         <a href="verifier.html" data-i18n="seal.verifier">打开独立验证器</a>
       </div>
     </div>
   </dialog>
 
-  <dialog id="releaseDialog" class="release-dialog" aria-labelledby="releaseTitle">
-    <form method="dialog">
-      <span>HUMAN OVERRIDE</span>
-      <h2 id="releaseTitle" data-i18n="release.title">确认强制放行？</h2>
-      <p data-i18n="release.body">该动作不会修改模型结论，并将以人工覆盖事件写入保全日志。</p>
-      <div>
-        <button value="cancel" class="button secondary" data-i18n="release.cancel">取消</button>
-        <button id="confirmReleaseButton" value="confirm" class="button primary" data-i18n="release.confirm">确认并记录</button>
-      </div>
+  <dialog id="decisionDialog" class="release-dialog" aria-labelledby="decisionFormTitle">
+    <form id="decisionForm">
+      <span>STRUCTURED HUMAN DECISION</span>
+      <h2 id="decisionFormTitle">记录人工决定</h2>
+      <p>机器结果仅为建议。下列人工决定将成为案宗的正式处置记录。</p>
+      <label for="humanDecisionAction"><span>处置动作</span><select id="humanDecisionAction" required><option value="">请选择</option><option value="allow">允许使用</option><option value="request_original">索取原件</option><option value="escalate">升级复核</option><option value="hold">暂缓发布</option></select></label>
+      <label for="humanDecisionReason"><span>理由代码</span><select id="humanDecisionReason" required><option value="">请选择</option><option value="source_verified">来源已核实</option><option value="source_missing">来源材料缺失</option><option value="model_signal">模型信号需谨慎处置</option><option value="policy_risk">编辑或合规风险</option><option value="other">其他</option></select></label>
+      <label for="humanDecisionNote"><span>决定说明</span><textarea id="humanDecisionNote" rows="4" maxlength="1000"></textarea></label>
+      <div><button id="closeDecisionButton" type="button" class="button secondary">取消</button><button class="button primary" type="submit">写入证据链</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="feedbackDialog" class="release-dialog" aria-labelledby="feedbackFormTitle">
+    <form id="feedbackForm">
+      <span>OUTCOME FEEDBACK</span>
+      <h2 id="feedbackFormTitle">补录核查结果</h2>
+      <label for="feedbackOutcome"><span>最终结果</span><select id="feedbackOutcome" required><option value="">请选择</option><option value="confirmed_real">确认真实</option><option value="confirmed_generated">确认生成</option><option value="unresolved">仍未解决</option></select></label>
+      <label for="feedbackBasis"><span>证据依据</span><textarea id="feedbackBasis" rows="4" maxlength="1000"></textarea></label>
+      <div><button id="closeFeedbackButton" type="button" class="button secondary">取消</button><button class="button primary" type="submit">写入反馈</button></div>
     </form>
   </dialog>
 
@@ -295,19 +335,19 @@
     <form id="modelConnectionForm" autocomplete="off">
       <header>
         <div>
-          <span>PRIVATE INFERENCE ACCESS</span>
+          <span>PROTECTED INFERENCE ACCESS</span>
           <h2 id="modelConnectionTitle" data-i18n="model.title">连接 ShareGuard 云端推理</h2>
         </div>
         <button id="closeModelConnectionButton" class="dialog-icon-button" type="button" aria-label="关闭模型连接窗口" data-i18n-aria-label="model.closeAria">×</button>
       </header>
       <p id="modelConnectionDescription" data-i18n="model.description">输入访问凭证后，影像会通过加密连接发送到受保护的云端筛查网关。模型权重与内部参数不会进入浏览器或公开仓库。</p>
       <label for="modelEndpoint">
-        <span data-i18n="model.endpoint">私有网关</span>
+        <span data-i18n="model.endpoint">受保护网关</span>
         <input id="modelEndpoint" type="url" readonly aria-readonly="true">
       </label>
       <div class="model-credential-grid">
         <label for="modelUsername">
-          <span data-i18n="model.username">演示账号</span>
+          <span data-i18n="model.username">访问账号</span>
           <input id="modelUsername" type="text" value="shareguard-demo" maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false" required>
         </label>
         <label for="modelPassword">

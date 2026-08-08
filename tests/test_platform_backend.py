@@ -150,7 +150,8 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertNotIn("const sampleCases", script)
         self.assertNotIn("function loadSampleCase", script)
         self.assertIn("PROTECTED SCREENING / LIVE RESULTS ONLY", html)
-        self.assertIn("不显示模拟案件", script)
+        self.assertIn("state.caseSummaries", script)
+        self.assertIn("function renderCasePicker", script)
         self.assertIn("function renderCaseContext", script)
 
     def test_production_page_has_no_github_pages_demo_fallback(self):
@@ -208,7 +209,6 @@ class PlatformBackendTests(unittest.TestCase):
             / "dossier.js"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('response.headers.get("X-ShareGuard-Demo") === "true"', script)
         self.assertIn('payload.backend === "mock"', script)
         self.assertIn("正式工作台拒绝演示模型响应", script)
         self.assertNotIn("setAnalysisPayload(await buildStaticDemoPayload())", script)
@@ -276,7 +276,8 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertNotIn("function decodeDataUrl", script)
         self.assertIn("data-lens-locked", script)
         self.assertIn("typeWriterEffect", script)
-        self.assertIn('headers: { "Accept-Language"', script)
+        api_client = (static / "api-client.js").read_text(encoding="utf-8")
+        self.assertIn('"Accept-Language"', api_client)
 
         self.assertIn("crypto.subtle.digest", crypto_worker)
         self.assertNotIn("crypto.subtle.sign", crypto_worker)
@@ -354,6 +355,7 @@ class PlatformBackendTests(unittest.TestCase):
             ".env.*",
             "secrets/",
             "*.pem",
+            "*.jwk",
             "reports/",
             "mlruns/",
             "runs/",
@@ -375,6 +377,7 @@ class PlatformBackendTests(unittest.TestCase):
         static = Path(__file__).resolve().parents[1] / "shareguard" / "platform" / "static"
         html = (static / "index.html").read_text(encoding="utf-8")
         script = (static / "dossier.js").read_text(encoding="utf-8")
+        api_client = (static / "api-client.js").read_text(encoding="utf-8")
         runtime = (static / "runtime-config.js").read_text(encoding="utf-8")
 
         self.assertIn('src="runtime-config.js"', html)
@@ -388,9 +391,9 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn("https://shareguard.systems", runtime)
         self.assertIn("https://api.shareguard.systems", runtime)
         self.assertIn("function isConfiguredRemotePage", script)
-        self.assertIn("function basicAuthorization", script)
-        self.assertIn('privateApiUrl("/v1/analyze")', script)
-        self.assertIn("credentials: \"omit\"", script)
+        self.assertIn("function basicAuthorization", api_client)
+        self.assertIn('this.request("/v1/analyze"', api_client)
+        self.assertIn("credentials: \"omit\"", api_client)
         self.assertNotIn(
             'localStorage.setItem("shareguard-model',
             script,

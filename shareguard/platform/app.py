@@ -37,6 +37,7 @@ from .spai_backend import HybridDetectorBackend, SpaiDetectorBackend
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_ASSET_ROUTES = {
+    "/api-client.js": ("api-client.js", "application/javascript; charset=utf-8"),
     "/dossier.css": ("dossier.css", "text/css; charset=utf-8"),
     "/dossier.js": ("dossier.js", "application/javascript; charset=utf-8"),
     "/i18n.js": ("i18n.js", "application/javascript; charset=utf-8"),

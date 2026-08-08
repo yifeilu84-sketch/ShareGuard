@@ -21,10 +21,19 @@ const modelConnection = {
   pendingAnalysis: false,
   status: "idle"
 };
+const apiClient = window.ShareGuardApi?.createClient({
+  baseUrl: usesRemoteModel() ? modelConnection.apiBaseUrl : ""
+});
 
 const state = {
   activeCase: { ...EMPTY_CASE },
   activeCaseRecord: null,
+  caseSummaries: [],
+  metrics: null,
+  selectedVersionId: "",
+  selectedAnnotationId: "",
+  annotationEditing: false,
+  annotationDraft: null,
   activePayload: null,
   activeViewIndex: 0,
   currentFile: null,
@@ -35,7 +44,6 @@ const state = {
   provenance: { available: false, hops: [], reason: "source_data_not_provided" },
   waterfallRows: [],
   custodyEvents: [],
-  reviewerNotes: [],
   evidencePackageBlob: null,
   evidencePackageName: ""
 };
@@ -74,11 +82,20 @@ function cacheDom() {
     "openReviewerButton", "reviewerImage", "reviewerTitle", "reviewerVerdict",
     "reviewerNarrative", "reviewForm", "reviewerComment", "reviewThread",
     "sealDialog", "sealTitle", "sealLog", "sealResult", "downloadSgdButton",
-    "releaseDialog", "confirmReleaseButton", "dropOverlay", "toast",
+    "dropOverlay", "toast",
     "modelConnectionButton", "modelConnectionLabel", "modelConnectionDialog",
     "modelConnectionForm", "modelEndpoint", "modelUsername", "modelPassword",
     "modelConnectionStatus", "modelDisconnectButton", "closeModelConnectionButton",
-    "annotationLayer", "provenanceBody", "provenanceStatus"
+    "annotationLayer", "provenanceBody", "provenanceStatus",
+    "caseRefreshButton", "caseDeleteButton", "versionInput", "versionImportButton",
+    "localMediaInput", "localMediaButton", "annotationEditButton", "annotationNote",
+    "annotationSaveButton", "annotationClearButton", "provenanceForm", "provenanceChannel",
+    "provenanceUrl", "provenanceCapturedAt", "provenanceNote", "feedbackButton",
+    "decisionDialog", "decisionForm", "humanDecisionAction", "humanDecisionReason",
+    "humanDecisionNote", "closeDecisionButton", "feedbackDialog", "feedbackForm",
+    "feedbackOutcome", "feedbackBasis", "closeFeedbackButton", "metricsSummary",
+    "metricCases", "metricVersions", "metricDecisions", "metricOverrides",
+    "metricLatency", "metricShift"
   ].forEach((id) => {
     dom[id] = document.getElementById(id);
   });
@@ -86,6 +103,7 @@ function cacheDom() {
 
 function init() {
   cacheDom();
+  document.body.classList.toggle("remote-model-enabled", usesRemoteModel());
   bindViewControls();
   bindUploadControls();
   bindDossierControls();
@@ -93,6 +111,7 @@ function init() {
   bindReviewerControls();
   bindDialogControls();
   bindModelConnectionControls();
+  bindPersistentWorkflowControls();
   renderModelConnectionState();
   renderCasePicker();
   renderWaterfall();
@@ -103,7 +122,6 @@ function init() {
   startQuarantineCountdowns();
   startThroughputWave();
   setupForensicCanvas();
-  loadStoredReviewerNotes();
   i18n?.subscribe(() => {
     refreshLocalizedView().catch(() => showToast("Locale refresh failed."));
   });
@@ -164,12 +182,204 @@ function switchView(viewName, options = {}) {
 }
 
 function renderCasePicker() {
-  dom.casePicker.innerHTML = `<div class="capability-empty">${escapeHtml(t("radar.notConnected", "未接入实时业务队列，不显示模拟案件。"))}</div>`;
-  dom.quarantineCount.textContent = "00";
+  const cases = Array.isArray(state.caseSummaries) ? state.caseSummaries : [];
+  dom.quarantineCount.textContent = String(cases.length).padStart(2, "0");
+  dom.queueCount.textContent = String(cases.filter((item) => item.status !== "sealed").length).padStart(2, "0");
+  if (!cases.length) {
+    dom.casePicker.innerHTML = `<div class="capability-empty">${escapeHtml(t("radar.empty", "尚无持久案件。导入影像后，案件会在此出现。"))}</div>`;
+    return;
+  }
+  dom.casePicker.innerHTML = cases.map((item) => {
+    const decision = item.human_decision?.action || item.latest_machine_recommendation || "review";
+    return `
+      <article class="quarantine-card" data-status="${escapeHtml(item.status)}">
+        <button type="button" data-case-id="${escapeHtml(item.case_id)}">
+          <span><b>${escapeHtml(shortCaseId(item.case_id))}</b><time>${escapeHtml(formatUtc(item.updated_at))}</time></span>
+          <strong>${escapeHtml(item.title)}</strong>
+          <span><small>${escapeHtml(item.version_count)} VERSION${item.version_count === 1 ? "" : "S"}</small><em>${escapeHtml(humanDecisionLabel(decision))}</em></span>
+        </button>
+      </article>`;
+  }).join("");
+  dom.casePicker.querySelectorAll("[data-case-id]").forEach((button) => {
+    button.addEventListener("click", () => openPersistedCase(button.dataset.caseId));
+  });
+}
+
+async function refreshPersistentWorkbench(options = {}) {
+  if (!apiClient || (usesRemoteModel() && !modelConnection.connected)) return;
+  const activeCaseId = options.preserveCase ? state.activeCaseRecord?.case_id : "";
+  await Promise.all([loadCaseList(), loadOperationalMetrics()]);
+  if (activeCaseId) {
+    const current = state.caseSummaries.find((item) => item.case_id === activeCaseId);
+    if (!current) resetActiveCase();
+  }
+}
+
+async function loadCaseList() {
+  const payload = await apiClient.listCases();
+  state.caseSummaries = Array.isArray(payload?.cases) ? payload.cases : [];
+  renderCasePicker();
+  renderWaterfall();
+  return state.caseSummaries;
+}
+
+async function loadOperationalMetrics() {
+  const payload = await apiClient.getMetrics();
+  const metrics = payload?.metrics || null;
+  state.metrics = metrics;
+  if (!metrics) return;
+  const humanCount = Object.values(metrics.human_decisions || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+  dom.metricCases.textContent = String(metrics.case_count ?? 0);
+  dom.metricVersions.textContent = String(metrics.version_count ?? 0);
+  dom.metricDecisions.textContent = String(humanCount);
+  dom.metricOverrides.textContent = String(metrics.override_count ?? 0);
+  dom.metricLatency.textContent = Number.isFinite(metrics.latency?.p50_ms) ? `${metrics.latency.p50_ms} ms` : "—";
+  const shift = metrics.distribution_shift || {};
+  dom.metricShift.textContent = shift.status === "insufficient_data"
+    ? `${shift.sample_count || 0}/${shift.minimum_sample_count || 30}`
+    : "NO BASELINE";
+  dom.metricShift.title = shift.status === "insufficient_data"
+    ? "样本不足，仅展示分数分布信号，不解释为准确率漂移。"
+    : "尚未建立经验证的参考分布基线。";
+  dom.intakeRate.textContent = metrics.latency?.sample_count ? String(metrics.latency.sample_count) : "0";
+}
+
+async function openPersistedCase(caseId) {
+  try {
+    const payload = await apiClient.getCase(caseId);
+    const record = payload?.case;
+    const version = record?.versions?.at(-1);
+    if (!record || !version) throw new Error("案件记录不完整。");
+    releaseCurrentObjectUrl();
+    state.currentFile = null;
+    state.currentDataUrl = "";
+    state.activeCase = {
+      id: record.case_id,
+      code: record.case_id,
+      title: record.title,
+      workflow: "持久案件复核",
+      source: record.declared_provenance?.channel || "DETACHED MEDIA",
+      handler: "AUTHENTICATED REVIEWER",
+      timestamp: formatUtc(record.created_at),
+      briefing: "该案件已从持久证据链重新打开。影像原件不在服务器保存；可在本机重新关联并核对 SHA-256。"
+    };
+    setAnalysisPayload(payloadFromStoredVersion(record, version));
+    renderPersistentCase(record);
+    switchView("dossier");
+  } catch (error) {
+    showApiError(error, "无法打开持久案件。");
+  }
+}
+
+function payloadFromStoredVersion(record, version) {
+  return {
+    backend: "persisted-case",
+    case_id: record.case_id,
+    version_id: version.version_id,
+    case_status: record.status,
+    chain_head: record.chain_head,
+    case: record,
+    request_id: version.request_id,
+    model_version: version.engine_release,
+    engine_release: version.engine_release,
+    detector_engine: version.detector_engine,
+    decision_layer: version.decision_layer,
+    engine_role: "primary",
+    file_name: version.file_name,
+    media_sha256: version.media_sha256,
+    model_score: version.model_score,
+    score_kind: version.score_kind,
+    decision_margin: version.decision_margin,
+    risk_level: version.risk_level,
+    decision: version.machine_recommendation,
+    uncertainty: version.report?.uncertainty || "unknown",
+    reliability: version.reliability,
+    calibration: version.calibration,
+    policy: version.policy,
+    localization: { available: false, reason: "image_level_model", annotations: [] },
+    provenance: { available: false, reason: "declared_source_rendered_separately", hops: [] },
+    report: version.report || {},
+    propagation_views: []
+  };
+}
+
+function renderPersistentCase(record) {
+  const sealed = record.status === "sealed";
+  state.activeCaseRecord = record;
+  document.body.classList.toggle("case-sealed", sealed);
+  state.selectedVersionId = record.versions?.some((item) => item.version_id === state.selectedVersionId)
+    ? state.selectedVersionId
+    : record.versions?.at(-1)?.version_id || "";
+  state.annotations = (record.annotations?.[state.selectedVersionId] || [])
+    .map(normalizePersistedAnnotation)
+    .filter(Boolean);
+  state.provenance = record.declared_provenance
+    ? declaredProvenanceView(record.declared_provenance)
+    : { available: false, hops: [], reason: "source_data_not_provided" };
+  state.custodyEvents = (record.events || []).map((event) => ({
+    time: formatUtc(event.created_at),
+    actor: String(event.actor_id || "").slice(-10).toUpperCase(),
+    event: event.event_type,
+    integrity: String(event.event_hash || "").slice(0, 12).toUpperCase()
+  }));
+  renderCaseContext(state.activeCase);
+  renderAnnotations();
+  renderProvenance();
+  renderCustodyLog();
+  dom.custodyDecision.textContent = record.human_decision
+    ? humanDecisionLabel(record.human_decision.action).toUpperCase()
+    : "HUMAN DECISION PENDING";
+  dom.custodySeal.textContent = record.status === "sealed"
+    ? String(record.chain_head).slice(0, 12).toUpperCase()
+    : "NOT SEALED";
+  dom.forceReleaseButton.disabled = sealed;
+  dom.feedbackButton.disabled = sealed;
+  dom.forceReleaseButton.textContent = record.human_decision
+    ? `更新人工决定 · ${humanDecisionLabel(record.human_decision.action)}`
+    : "记录人工决定";
+  dom.feedbackButton.textContent = record.feedback
+    ? `更新结果反馈 · ${feedbackOutcomeLabel(record.feedback.outcome)}`
+    : "补录结果反馈";
+  dom.caseDeleteButton.disabled = sealed;
+  dom.sealButton.disabled = sealed || !record.human_decision;
+  dom.versionInput.disabled = sealed;
+  dom.versionImportButton.setAttribute("aria-disabled", String(sealed));
+  dom.annotationEditButton.disabled = sealed;
+  dom.annotationNote.disabled = sealed;
+  dom.annotationSaveButton.disabled = sealed;
+  dom.annotationClearButton.disabled = sealed;
+  populateWorkflowForms(record);
+}
+
+async function deleteActiveCase() {
+  const record = state.activeCaseRecord;
+  if (!record || record.status === "sealed") return;
+  if (!window.confirm(`删除未签封案件 ${shortCaseId(record.case_id)}？此操作无法撤销。`)) return;
+  try {
+    await apiClient.deleteCase(record.case_id);
+    resetActiveCase();
+    await refreshPersistentWorkbench();
+    showToast("案件已删除。");
+  } catch (error) {
+    showApiError(error, "案件删除失败。");
+  }
+}
+
+function resetActiveCase() {
+  releaseCurrentObjectUrl();
+  state.currentFile = null;
+  state.currentDataUrl = "";
+  state.activeCaseRecord = null;
+  state.selectedVersionId = "";
+  state.activeCase = { ...EMPTY_CASE };
+  document.body.classList.remove("case-sealed");
+  initializeProductionWorkbench();
+  renderCaseContext(state.activeCase);
 }
 
 function renderCaseContext(item) {
-  dom.stageCaseCode.textContent = `CASE #${item.code}`;
+  const displayCode = shortCaseId(item.code);
+  dom.stageCaseCode.textContent = `CASE #${displayCode}`;
   dom.dossierTitle.textContent = caseText(item, "title");
   dom.caseTimestamp.textContent = item.timestamp;
   dom.caseSource.textContent = item.source;
@@ -178,9 +388,9 @@ function renderCaseContext(item) {
     <span>EVENT BRIEFING</span>
     <p>${escapeHtml(caseText(item, "briefing"))}</p>
   `;
-  dom.footerCase.textContent = `CASE #${item.code}`;
-  dom.custodyCaseCode.textContent = item.code;
-  dom.reviewerTitle.textContent = `CASE #${item.code}`;
+  dom.footerCase.textContent = `CASE #${displayCode}`;
+  dom.custodyCaseCode.textContent = displayCode;
+  dom.reviewerTitle.textContent = `CASE #${displayCode}`;
 }
 
 function bindUploadControls() {
@@ -239,6 +449,8 @@ async function handleFile(file) {
     briefing: t("case.upload.briefing", "该影像由当前工作台导入，系统将调用云端筛查引擎生成图像级判定与本图衍生鲁棒性视图。")
   };
   state.activePayload = null;
+  state.activeCaseRecord = null;
+  state.selectedVersionId = "";
   state.annotations = [];
   state.provenance = { available: false, hops: [], reason: "source_data_not_provided" };
   state.propagationViews = [];
@@ -271,51 +483,19 @@ async function analyzeCurrentFile() {
       return;
     }
 
-    const body = new FormData();
     if (!state.currentFile) throw new Error(t("model.noImage", "尚未选择待分析影像。"));
-    body.append("image", state.currentFile, state.currentFile.name);
-    const requestOptions = {
-      method: "POST",
-      body,
-      headers: { "Accept-Language": i18n?.getLocale() || "zh-CN" },
-      cache: "no-store",
-      credentials: "omit",
-      referrerPolicy: "no-referrer"
-    };
-    if (usesRemoteModel()) {
-      requestOptions.mode = "cors";
-      requestOptions.headers.Authorization = basicAuthorization(
-        modelConnection.username,
-        modelConnection.password
-      );
-    }
-    const response = await fetch(
-      usesRemoteModel() ? privateApiUrl("/v1/analyze") : "/v1/analyze",
-      requestOptions
-    );
-    if (response.status === 401 && usesRemoteModel()) {
-      modelConnection.username = "";
-      modelConnection.password = "";
-      modelConnection.connected = false;
-      modelConnection.pendingAnalysis = true;
-      modelConnection.status = "error";
-      renderModelConnectionState();
-      renderAnalysisUnavailable(t("model.invalid", "账号或密码无效，请重新输入。"));
-      openModelConnectionDialog({
-        state: "error",
-        message: t("model.invalid", "账号或密码无效，请重新输入。")
-      });
-      return;
-    }
-    if (!response.ok) {
-      throw new Error(`分析服务返回 ${response.status}`);
-    }
-    const isDemoResponse = response.headers.get("X-ShareGuard-Demo") === "true";
-    const payload = await response.json();
-    if (isDemoResponse || payload.backend === "mock") {
+    if (!apiClient) throw new Error("SHAREGUARD API CLIENT UNAVAILABLE");
+    const payload = await apiClient.analyze(state.currentFile, {
+      locale: i18n?.getLocale() || "zh-CN",
+      versionRole: "original",
+      title: state.activeCase.title
+    });
+    if (payload.backend === "mock") {
       throw new Error(t("model.demoRejected", "正式工作台拒绝演示模型响应。"));
     } else {
       setAnalysisPayload(payload);
+      if (payload.case) renderPersistentCase(payload.case);
+      await refreshPersistentWorkbench({ preserveCase: true });
       analysisCompleted = true;
       if (usesRemoteModel()) {
         modelConnection.status = "connected";
@@ -324,6 +504,18 @@ async function analyzeCurrentFile() {
       }
     }
   } catch (error) {
+    if (error?.status === 401 && usesRemoteModel()) {
+      apiClient?.clearCredentials();
+      modelConnection.username = "";
+      modelConnection.password = "";
+      modelConnection.connected = false;
+      modelConnection.pendingAnalysis = true;
+      modelConnection.status = "error";
+      renderModelConnectionState();
+      renderAnalysisUnavailable(t("model.invalid", "账号或密码无效，请重新输入。"));
+      openModelConnectionDialog({ state: "error", message: t("model.invalid", "账号或密码无效，请重新输入。") });
+      return;
+    }
     if (usesRemoteModel()) {
       modelConnection.username = "";
       modelConnection.password = "";
@@ -383,19 +575,6 @@ function normalizeApiBaseUrl(value) {
   }
 }
 
-function privateApiUrl(path) {
-  return new URL(path, `${modelConnection.apiBaseUrl}/`).toString();
-}
-
-function basicAuthorization(username, password) {
-  const bytes = new TextEncoder().encode(`${username}:${password}`);
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return `Basic ${window.btoa(binary)}`;
-}
-
 function renderAnalysisUnavailable(message) {
   narrativeAnimationToken += 1;
   state.activePayload = null;
@@ -418,6 +597,10 @@ function renderAnalysisUnavailable(message) {
   dom.machineNarrative.textContent = message;
   dom.evidenceList.innerHTML = "";
   dom.forceReleaseButton.disabled = true;
+  dom.forceReleaseButton.textContent = "记录人工决定";
+  dom.feedbackButton.disabled = true;
+  dom.feedbackButton.textContent = "补录结果反馈";
+  dom.caseDeleteButton.disabled = !state.activeCaseRecord;
   dom.sealButton.disabled = true;
   [dom.saveHtmlReportButton, dom.printReportButton, dom.downloadJsonButton, dom.copyReportButton].forEach((button) => { button.disabled = true; });
   dom.reviewerVerdict.textContent = noResultEn;
@@ -437,9 +620,15 @@ function setAnalysisPayload(payload) {
     };
     renderCaseContext(state.activeCase);
   }
+  state.selectedVersionId = normalized.version_id
+    || normalized.case?.versions?.at(-1)?.version_id
+    || "";
   state.propagationViews = normalized.propagation_views;
-  state.annotations = normalized.localization.annotations;
-  state.provenance = normalized.provenance;
+  state.annotations = normalized.case?.annotations?.[state.selectedVersionId]
+    || normalized.localization.annotations;
+  state.provenance = normalized.case?.declared_provenance
+    ? declaredProvenanceView(normalized.case.declared_provenance)
+    : normalized.provenance;
   renderLiveEngineState(normalized);
   renderDecision(normalized);
   renderViews(normalized);
@@ -449,7 +638,9 @@ function setAnalysisPayload(payload) {
   updateCustodySummary(normalized);
   resizeForensicCanvas();
   dom.forceReleaseButton.disabled = false;
-  dom.sealButton.disabled = !normalized.case?.human_decision;
+  dom.feedbackButton.disabled = false;
+  dom.caseDeleteButton.disabled = normalized.case?.status === "sealed";
+  dom.sealButton.disabled = !normalized.case?.human_decision || normalized.case?.status === "sealed";
   [dom.saveHtmlReportButton, dom.printReportButton, dom.downloadJsonButton, dom.copyReportButton].forEach((button) => { button.disabled = false; });
 }
 
@@ -519,6 +710,8 @@ function normalizePayload(payload) {
     case: payload.case && typeof payload.case === "object" ? payload.case : null,
     request_id: String(payload.request_id || ""),
     model_version: String(payload.model_version || ""),
+    engine_release: String(payload.engine_release || payload.model_version || ""),
+    media_sha256: String(payload.media_sha256 || ""),
     detector_engine: detectorEngine,
     engine_role: String(payload.engine_role || "primary"),
     decision_layer: decisionLayer,
@@ -534,6 +727,8 @@ function normalizePayload(payload) {
     decision,
     uncertainty: String(payload.uncertainty || report.uncertainty || "unknown"),
     reliability,
+    calibration: payload.calibration && typeof payload.calibration === "object" ? payload.calibration : { status: "unavailable" },
+    policy: payload.policy && typeof payload.policy === "object" ? payload.policy : {},
     localization,
     provenance,
     report: {
@@ -556,10 +751,13 @@ function normalizeAnnotation(annotation, index) {
   const height = Number(annotation.height ?? annotation.h ?? 0);
   if (![x, y, width, height].every(Number.isFinite)) return null;
   return {
-    id: String(annotation.id || `annotation-${index + 1}`),
-    label: String(annotation.label || `A${index + 1}`),
-    title: String(annotation.title || "模型定位"),
-    detail: String(annotation.detail || ""),
+    id: String(annotation.annotation_id || annotation.id || `annotation-${index + 1}`),
+    annotation_id: String(annotation.annotation_id || annotation.id || `annotation-${index + 1}`),
+    label: String(annotation.label || `R${index + 1}`),
+    title: String(annotation.title || (annotation.origin === "human_reviewer" ? "人工复核标注" : "模型定位")),
+    detail: String(annotation.note || annotation.detail || ""),
+    note: String(annotation.note || annotation.detail || ""),
+    origin: String(annotation.origin || "model_output"),
     x: clamp(x, 0, 1),
     y: clamp(y, 0, 1),
     width: clamp(width, 0, 1),
@@ -612,6 +810,10 @@ function renderLiveEngineState(payload) {
   dom.engineLabel.title = `${payload.model_version || "shareguard-screening"} / ${payload.decision_layer}`;
 }
 
+function normalizePersistedAnnotation(annotation, index) {
+  return normalizeAnnotation({ ...annotation, origin: "human_reviewer" }, index);
+}
+
 function renderDecision(payload) {
   const verdicts = {
     hold: [t("decision.hold.en", "SUSPEND"), t("decision.hold.local", "暂缓发布")],
@@ -647,7 +849,7 @@ function renderAnnotations() {
     return;
   }
   dom.annotationLayer.innerHTML = annotations.map((annotation, index) => `
-    <button class="annotation-point" type="button" data-annotation-index="${index}"
+    <button class="annotation-point${annotationId(annotation) === state.selectedAnnotationId ? " active" : ""}" type="button" data-annotation-index="${index}" data-origin="${escapeHtml(annotation.origin || "human_reviewer")}"
       style="left:${annotation.x * 100}%;top:${annotation.y * 100}%;width:${Math.max(annotation.width * 100, 3)}%;height:${Math.max(annotation.height * 100, 3)}%"
       aria-label="${escapeHtml(annotation.title)}">
       <span class="annotation-index">${escapeHtml(annotation.label)}</span>
@@ -658,17 +860,80 @@ function renderAnnotations() {
     button.addEventListener("click", () => {
       const index = Number(button.dataset.annotationIndex);
       const annotation = state.annotations[index];
+      state.selectedAnnotationId = annotationId(annotation);
+      dom.annotationNote.value = String(annotation?.note || annotation?.detail || "");
       dom.annotationLayer.querySelectorAll("[data-annotation-index]").forEach((item) => item.classList.toggle("active", item === button));
       if (annotation) drawForensics({ x: annotation.x + annotation.width / 2, y: annotation.y + annotation.height / 2 });
-      addCustodyEvent("DESK-EDITOR", `Model localization ${annotation?.label || index + 1} inspected`, "APPENDED");
     });
   });
   drawForensics();
 }
 
+function normalizedEvidencePoint(clientX, clientY) {
+  const rect = dom.evidenceViewport.getBoundingClientRect();
+  return {
+    x: clamp((clientX - rect.left) / rect.width, 0, 1),
+    y: clamp((clientY - rect.top) / rect.height, 0, 1)
+  };
+}
+
+function annotationBounds(start, end) {
+  const x = Math.min(start.x, end.x);
+  const y = Math.min(start.y, end.y);
+  return {
+    x,
+    y,
+    width: Math.max(0, Math.max(start.x, end.x) - x),
+    height: Math.max(0, Math.max(start.y, end.y) - y)
+  };
+}
+
+function finishAnnotationDraft(clientX, clientY) {
+  if (!state.annotationDraft) return;
+  const bounds = annotationBounds(
+    state.annotationDraft.start,
+    normalizedEvidencePoint(clientX, clientY)
+  );
+  state.annotationDraft = null;
+  if (bounds.width < 0.01 || bounds.height < 0.01) {
+    drawForensics();
+    showToast("标注区域过小，请拖动框选一个明确区域。");
+    return;
+  }
+  const id = `review-${Date.now().toString(36)}`;
+  state.annotations.push({
+    annotation_id: id,
+    id,
+    label: `R${state.annotations.length + 1}`,
+    title: "人工复核标注",
+    note: dom.annotationNote.value.trim(),
+    detail: dom.annotationNote.value.trim(),
+    origin: "human_reviewer",
+    ...bounds
+  });
+  state.selectedAnnotationId = id;
+  renderAnnotations();
+}
+
+function annotationId(annotation) {
+  return String(annotation?.annotation_id || annotation?.id || "");
+}
+
 function renderProvenance() {
   if (!dom.provenanceBody || !dom.provenanceStatus) return;
   const provenance = state.provenance || { available: false, hops: [] };
+  if (provenance.declared) {
+    dom.provenanceStatus.textContent = "DECLARED / UNVERIFIED";
+    dom.provenanceBody.className = "provenance-declaration";
+    dom.provenanceBody.innerHTML = `
+      <dl>
+        <div><dt>CHANNEL</dt><dd>${escapeHtml(provenance.channel || "—")}</dd></div>
+        <div><dt>URL</dt><dd>${provenance.source_url ? `<a href="${escapeHtml(provenance.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(provenance.source_url)}</a>` : "—"}</dd></div>
+        <div><dt>CAPTURED</dt><dd>${escapeHtml(formatUtc(provenance.captured_at))}</dd></div>
+        <div><dt>NOTE</dt><dd>${escapeHtml(provenance.note || "—")}</dd></div>
+      </dl>`;
+    return;
+  }
   if (!provenance.available || !provenance.hops.length) {
     dom.provenanceStatus.textContent = "NO SOURCE DATA";
     dom.provenanceBody.className = "capability-empty";
@@ -721,6 +986,7 @@ function typeWriterEffect(element, text, speed = 14) {
 
 function renderViews(payload) {
   const suppliedViews = Array.isArray(payload.propagation_views) ? payload.propagation_views : [];
+  const persistedVersions = state.activeCaseRecord?.versions || payload.case?.versions || [];
   const views = suppliedViews.length
     ? suppliedViews
     : state.currentDataUrl
@@ -728,9 +994,34 @@ function renderViews(payload) {
       : [];
   state.propagationViews = views;
   dom.compareRange.disabled = views.length < 2;
+  const versionButtons = persistedVersions.map((version, index) => `
+    <button class="evidence-version" type="button" data-version-id="${escapeHtml(version.version_id)}" aria-pressed="${version.version_id === state.selectedVersionId}">
+      <span>V${String(index + 1).padStart(2, "0")}</span>
+      <span><strong>${escapeHtml(version.role === "original" ? "原始导入" : version.role === "observed_variant" ? "观察传播版本" : "生成压力视图")}</strong><small>${escapeHtml(formatModelScore(version.model_score))}</small></span>
+    </button>`).join("");
+  const generatedButtons = views
+    .map((view, index) => ({ view, index }))
+    .filter(({ view }) => view.origin === "generated_from_upload")
+    .map(({ view, index }, generatedIndex) => `
+    <button class="evidence-version generated" type="button" data-view-index="${index}" aria-pressed="false">
+      <span>G${String(generatedIndex + 1).padStart(2, "0")}</span>
+      <span><strong>${escapeHtml(view.label)}</strong><small>${escapeHtml(view.origin === "generated_from_upload" ? "GENERATED STRESS VIEW" : view.size)}</small></span>
+    </button>`).join("");
+  dom.viewGrid.innerHTML = versionButtons || generatedButtons
+    ? `${versionButtons}${generatedButtons}`
+    : `<div class="capability-empty">${escapeHtml(t("evidence.noViews", "导入影像后显示案件版本。"))}</div>`;
+  dom.viewGrid.querySelectorAll("[data-version-id]").forEach((button) => {
+    button.addEventListener("click", () => selectStoredVersion(button.dataset.versionId));
+  });
+  dom.viewGrid.querySelectorAll("[data-view-index]").forEach((button) => {
+    button.addEventListener("click", () => selectEvidenceView(Number(button.dataset.viewIndex)));
+  });
   if (!views.length) {
-    dom.viewGrid.innerHTML = `<div class="capability-empty">${escapeHtml(t("evidence.noViews", "导入影像后显示本图衍生鲁棒性视图。"))}</div>`;
     dom.emptyEvidenceState.hidden = false;
+    dom.emptyEvidenceState.querySelector("strong").textContent = persistedVersions.length ? "DETACHED MEDIA" : "AWAITING IMAGE";
+    dom.emptyEvidenceState.querySelector("span").textContent = persistedVersions.length
+      ? "服务器仅保存媒体摘要。请关联本地原件以查看影像。"
+      : "导入影像以启动真实模型分析";
     dom.processedImage.hidden = true;
     dom.originalLayer.hidden = true;
     dom.splitIndicator.hidden = true;
@@ -743,16 +1034,22 @@ function renderViews(payload) {
   dom.originalLayer.hidden = false;
   dom.splitIndicator.hidden = false;
   dom.comparisonControl.hidden = false;
-  dom.viewGrid.innerHTML = views.slice(0, 6).map((view, index) => `
-    <button class="evidence-version" type="button" data-view-index="${index}" aria-pressed="${index === 0}">
-      <span>V${String(index + 1).padStart(2, "0")}</span>
-      <span><strong>${escapeHtml(view.label)}</strong><small>${escapeHtml(view.size)}</small></span>
-    </button>
-  `).join("");
-  dom.viewGrid.querySelectorAll("[data-view-index]").forEach((button) => {
-    button.addEventListener("click", () => selectEvidenceView(Number(button.dataset.viewIndex)));
-  });
   selectEvidenceView(0, { record: false });
+}
+
+function selectStoredVersion(versionId) {
+  const record = state.activeCaseRecord;
+  const version = record?.versions?.find((item) => item.version_id === versionId);
+  if (!record || !version) return;
+  const currentDigest = state.currentFile ? state.activePayload?.media_sha256 : "";
+  if (currentDigest && currentDigest !== version.media_sha256) {
+    releaseCurrentObjectUrl();
+    state.currentFile = null;
+    state.currentDataUrl = "";
+  }
+  state.selectedVersionId = version.version_id;
+  setAnalysisPayload(payloadFromStoredVersion(record, version));
+  renderPersistentCase(record);
 }
 
 function selectEvidenceView(index, options = {}) {
@@ -770,9 +1067,6 @@ function selectEvidenceView(index, options = {}) {
   dom.viewGrid.querySelectorAll("[data-view-index]").forEach((button) => {
     button.setAttribute("aria-pressed", String(Number(button.dataset.viewIndex) === index));
   });
-  if (options.record !== false) {
-    addCustodyEvent("DESK-EDITOR", `Generated robustness view ${view.label} inspected`, "APPENDED");
-  }
   window.setTimeout(resizeForensicCanvas, 0);
 }
 
@@ -784,6 +1078,251 @@ function bindDossierControls() {
   syncComparisonSplit();
 }
 
+function declaredProvenanceView(record) {
+  return {
+    available: true,
+    declared: true,
+    status: "declared_unverified",
+    channel: String(record?.channel || ""),
+    source_url: String(record?.source_url || ""),
+    captured_at: String(record?.captured_at || ""),
+    note: String(record?.note || ""),
+    hops: []
+  };
+}
+
+function populateWorkflowForms(record) {
+  const provenance = record?.declared_provenance || {};
+  dom.provenanceChannel.value = provenance.channel || "";
+  dom.provenanceUrl.value = provenance.source_url || "";
+  dom.provenanceCapturedAt.value = toLocalDateTimeValue(provenance.captured_at);
+  dom.provenanceNote.value = provenance.note || "";
+  const decision = record?.human_decision || {};
+  dom.humanDecisionAction.value = decision.action || "";
+  dom.humanDecisionReason.value = decision.reason_code || "";
+  dom.humanDecisionNote.value = decision.note || "";
+  const feedback = record?.feedback || {};
+  dom.feedbackOutcome.value = feedback.outcome || "";
+  dom.feedbackBasis.value = feedback.evidence_basis || "";
+  const disabled = record?.status === "sealed";
+  [...dom.provenanceForm.elements, ...dom.decisionForm.elements, ...dom.feedbackForm.elements]
+    .forEach((control) => { control.disabled = disabled; });
+}
+
+function bindPersistentWorkflowControls() {
+  dom.caseRefreshButton.addEventListener("click", () => {
+    refreshPersistentWorkbench({ preserveCase: true }).catch((error) => showApiError(error, "刷新案件数据失败。"));
+  });
+  dom.caseDeleteButton.addEventListener("click", deleteActiveCase);
+  dom.versionInput.addEventListener("change", () => {
+    const [file] = dom.versionInput.files || [];
+    dom.versionInput.value = "";
+    if (file) analyzeObservedVersion(file);
+  });
+  dom.localMediaInput.addEventListener("change", () => {
+    const [file] = dom.localMediaInput.files || [];
+    dom.localMediaInput.value = "";
+    if (file) attachLocalMedia(file);
+  });
+  dom.annotationEditButton.addEventListener("click", toggleAnnotationEditing);
+  dom.annotationSaveButton.addEventListener("click", saveReviewerAnnotations);
+  dom.annotationClearButton.addEventListener("click", deleteSelectedAnnotation);
+  dom.provenanceForm.addEventListener("submit", submitDeclaredProvenance);
+}
+
+async function analyzeObservedVersion(file) {
+  const record = state.activeCaseRecord;
+  if (!record) {
+    showToast("请先打开一个持久案件。");
+    return;
+  }
+  if (record.status === "sealed") {
+    showToast("已签封案件不能追加版本。");
+    return;
+  }
+  if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+    showToast(t("toast.invalidType", "仅接受 JPEG、PNG 或 WebP 影像。"));
+    return;
+  }
+  document.body.classList.add("is-analyzing");
+  dom.stageStatusLabel.textContent = "正在分析观察版本";
+  try {
+    const payload = await apiClient.analyze(file, {
+      caseId: record.case_id,
+      versionRole: "observed_variant",
+      locale: i18n?.getLocale() || "zh-CN"
+    });
+    releaseCurrentObjectUrl();
+    state.currentFile = file;
+    state.currentObjectUrl = URL.createObjectURL(file);
+    state.currentDataUrl = state.currentObjectUrl;
+    setAnalysisPayload(payload);
+    renderPersistentCase(payload.case);
+    await refreshPersistentWorkbench({ preserveCase: true });
+    showToast("观察版本已分析并写入同一案件。" );
+  } catch (error) {
+    showApiError(error, "观察版本分析失败。");
+  } finally {
+    document.body.classList.remove("is-analyzing");
+  }
+}
+
+async function attachLocalMedia(file) {
+  const version = selectedVersion();
+  if (!version) {
+    showToast("当前案件没有可关联的版本。");
+    return;
+  }
+  if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+    showToast(t("toast.invalidType", "仅接受 JPEG、PNG 或 WebP 影像。"));
+    return;
+  }
+  try {
+    const digest = await sha256Blob(file);
+    if (digest !== String(version.media_sha256 || "").toLowerCase()) {
+      throw new Error("本地文件 SHA-256 与所选版本不一致。");
+    }
+    releaseCurrentObjectUrl();
+    state.currentFile = file;
+    state.currentObjectUrl = URL.createObjectURL(file);
+    state.currentDataUrl = state.currentObjectUrl;
+    dom.previewImage.src = state.currentDataUrl;
+    dom.processedImage.src = state.currentDataUrl;
+    dom.reviewerImage.src = state.currentDataUrl;
+    dom.reviewerImage.hidden = false;
+    renderViews({ propagation_views: [{
+      id: version.version_id,
+      label: version.role === "original" ? "已验证本地原件" : "已验证观察版本",
+      data_url: state.currentDataUrl,
+      size: `${version.image?.width || "?"} × ${version.image?.height || "?"}`,
+      origin: "local_digest_verified",
+      observed: true
+    }] });
+    dom.fileMeta.textContent = `${file.name.toUpperCase()} / SHA-256 VERIFIED / ${formatBytes(file.size)}`;
+    showToast("本地媒体与案宗摘要匹配，已在内存中关联。");
+  } catch (error) {
+    showApiError(error, "本地媒体关联失败。");
+  }
+}
+
+function toggleAnnotationEditing() {
+  if (!state.activeCaseRecord || state.activeCaseRecord.status === "sealed") return;
+  if (!state.currentDataUrl) {
+    showToast("请先关联当前版本的本地媒体，再进行框选标注。");
+    return;
+  }
+  state.annotationEditing = !state.annotationEditing;
+  state.annotationDraft = null;
+  dom.annotationEditButton.setAttribute("aria-pressed", String(state.annotationEditing));
+  dom.evidenceViewport.dataset.annotationEditing = String(state.annotationEditing);
+  dom.stageStatusLabel.textContent = state.annotationEditing ? "人工标注模式：拖动框选区域" : "人工标注模式已关闭";
+  hideForensicLens();
+}
+
+async function saveReviewerAnnotations() {
+  const record = state.activeCaseRecord;
+  const versionId = state.selectedVersionId;
+  if (!record || !versionId || record.status === "sealed") return;
+  const selected = state.annotations.find((item) => annotationId(item) === state.selectedAnnotationId);
+  if (selected && dom.annotationNote.value.trim()) selected.note = dom.annotationNote.value.trim();
+  const annotations = state.annotations.map((item, index) => ({
+    annotation_id: annotationId(item) || `annotation-${index + 1}`,
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    note: String(item.note || item.detail || "")
+  }));
+  try {
+    const payload = await apiClient.replaceAnnotations(record.case_id, versionId, annotations);
+    renderPersistentCase(payload.case);
+    if (state.activePayload) state.activePayload.case = payload.case;
+    showToast("人工标注已写入哈希审计链。");
+  } catch (error) {
+    showApiError(error, "人工标注保存失败。");
+  }
+}
+
+function deleteSelectedAnnotation() {
+  if (!state.selectedAnnotationId || state.activeCaseRecord?.status === "sealed") return;
+  state.annotations = state.annotations.filter((item) => annotationId(item) !== state.selectedAnnotationId);
+  state.selectedAnnotationId = "";
+  dom.annotationNote.value = "";
+  renderAnnotations();
+}
+
+async function submitDeclaredProvenance(event) {
+  event.preventDefault();
+  const record = state.activeCaseRecord;
+  if (!record || record.status === "sealed") return;
+  const capturedAt = dom.provenanceCapturedAt.value
+    ? new Date(dom.provenanceCapturedAt.value).toISOString()
+    : "";
+  try {
+    const payload = await apiClient.declareProvenance(record.case_id, {
+      channel: dom.provenanceChannel.value.trim(),
+      source_url: dom.provenanceUrl.value.trim(),
+      captured_at: capturedAt,
+      note: dom.provenanceNote.value.trim()
+    });
+    renderPersistentCase(payload.case);
+    if (state.activePayload) state.activePayload.case = payload.case;
+    showToast("声明来源已写入证据链，并标记为未独立验证。");
+  } catch (error) {
+    showApiError(error, "来源声明保存失败。");
+  }
+}
+
+async function submitHumanDecision(event) {
+  event.preventDefault();
+  const record = state.activeCaseRecord;
+  if (!record || record.status === "sealed") return;
+  const reason = dom.humanDecisionReason.value;
+  const note = dom.humanDecisionNote.value.trim();
+  if (reason === "other" && !note) {
+    showToast("理由选择“其他”时必须填写决定说明。");
+    return;
+  }
+  try {
+    const payload = await apiClient.recordDecision(record.case_id, {
+      action: dom.humanDecisionAction.value,
+      reason_code: reason,
+      note
+    });
+    renderPersistentCase(payload.case);
+    if (state.activePayload) state.activePayload.case = payload.case;
+    dom.decisionDialog.close();
+    showToast("人工决定已成为案宗正式处置记录。");
+  } catch (error) {
+    showApiError(error, "人工决定保存失败。");
+  }
+}
+
+async function submitOutcomeFeedback(event) {
+  event.preventDefault();
+  const record = state.activeCaseRecord;
+  if (!record || record.status === "sealed") return;
+  const outcome = dom.feedbackOutcome.value;
+  const basis = dom.feedbackBasis.value.trim();
+  if (outcome !== "unresolved" && !basis) {
+    showToast("确认结果必须填写证据依据。");
+    return;
+  }
+  try {
+    const payload = await apiClient.recordFeedback(record.case_id, {
+      outcome,
+      evidence_basis: basis
+    });
+    renderPersistentCase(payload.case);
+    if (state.activePayload) state.activePayload.case = payload.case;
+    dom.feedbackDialog.close();
+    await loadOperationalMetrics();
+    showToast("核查结果反馈已写入案件。" );
+  } catch (error) {
+    showApiError(error, "结果反馈保存失败。");
+  }
+}
+
 function setupForensicCanvas() {
   if (!dom.evidenceViewport || !dom.forensicCanvas) return;
   const resizeObserver = "ResizeObserver" in window ? new ResizeObserver(resizeForensicCanvas) : null;
@@ -792,22 +1331,42 @@ function setupForensicCanvas() {
   dom.processedImage.addEventListener("load", resizeForensicCanvas);
 
   dom.evidenceViewport.addEventListener("pointerenter", (event) => {
-    if (event.pointerType !== "mouse" || touchLensLocked) return;
+    if (state.annotationEditing || event.pointerType !== "mouse" || touchLensLocked) return;
     showForensicLens();
   });
   dom.evidenceViewport.addEventListener("pointermove", (event) => {
+    if (state.annotationEditing && state.annotationDraft?.pointerId === event.pointerId) {
+      state.annotationDraft.current = normalizedEvidencePoint(event.clientX, event.clientY);
+      drawForensics();
+      return;
+    }
     if (event.pointerType !== "mouse" || touchLensLocked) return;
     positionForensicLens(event.clientX, event.clientY);
   });
   dom.evidenceViewport.addEventListener("pointerleave", (event) => {
-    if (event.pointerType !== "mouse" || touchLensLocked) return;
+    if (state.annotationEditing || event.pointerType !== "mouse" || touchLensLocked) return;
     hideForensicLens();
   });
   dom.evidenceViewport.addEventListener("pointerdown", (event) => {
+    if (state.annotationEditing) {
+      if (event.target.closest?.("[data-annotation-index]")) return;
+      event.preventDefault();
+      const point = normalizedEvidencePoint(event.clientX, event.clientY);
+      state.annotationDraft = { pointerId: event.pointerId, start: point, current: point };
+      dom.evidenceViewport.setPointerCapture?.(event.pointerId);
+      drawForensics();
+      return;
+    }
     if (event.pointerType === "mouse") return;
     touchPointerStart = { id: event.pointerId, x: event.clientX, y: event.clientY };
   });
   dom.evidenceViewport.addEventListener("pointerup", (event) => {
+    if (state.annotationEditing && state.annotationDraft?.pointerId === event.pointerId) {
+      event.preventDefault();
+      finishAnnotationDraft(event.clientX, event.clientY);
+      dom.evidenceViewport.releasePointerCapture?.(event.pointerId);
+      return;
+    }
     if (event.pointerType === "mouse" || !touchPointerStart || touchPointerStart.id !== event.pointerId) return;
     const travel = Math.hypot(event.clientX - touchPointerStart.x, event.clientY - touchPointerStart.y);
     touchPointerStart = null;
@@ -819,8 +1378,17 @@ function setupForensicCanvas() {
       positionForensicLens(event.clientX, event.clientY, { touch: true });
     }
   });
-  dom.evidenceViewport.addEventListener("pointercancel", () => { touchPointerStart = null; });
+  dom.evidenceViewport.addEventListener("pointercancel", () => {
+    touchPointerStart = null;
+    state.annotationDraft = null;
+    drawForensics();
+  });
   dom.evidenceViewport.addEventListener("keydown", (event) => {
+    if ((event.key === "Delete" || event.key === "Backspace") && state.selectedAnnotationId) {
+      event.preventDefault();
+      deleteSelectedAnnotation();
+      return;
+    }
     if (event.key === "Escape" && touchLensLocked) {
       setForensicLensLocked(false);
       return;
@@ -902,6 +1470,9 @@ function drawForensics(pointer) {
     ctx.lineWidth = 1;
     ctx.setLineDash([5, 4]);
     annotations.forEach((annotation) => {
+      ctx.strokeStyle = annotationId(annotation) === state.selectedAnnotationId
+        ? "rgba(255, 193, 7, .98)"
+        : "rgba(211, 47, 47, .92)";
       ctx.strokeRect(
         rect.width * annotation.x,
         rect.height * annotation.y,
@@ -909,6 +1480,20 @@ function drawForensics(pointer) {
         rect.height * annotation.height
       );
     });
+    ctx.setLineDash([]);
+  }
+
+  if (state.annotationDraft) {
+    const bounds = annotationBounds(state.annotationDraft.start, state.annotationDraft.current);
+    ctx.strokeStyle = "rgba(255, 193, 7, .98)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(
+      rect.width * bounds.x,
+      rect.height * bounds.y,
+      rect.width * bounds.width,
+      rect.height * bounds.height
+    );
     ctx.setLineDash([]);
   }
 
@@ -929,20 +1514,27 @@ function drawForensics(pointer) {
 }
 
 function renderWaterfall() {
-  if (!state.waterfallRows.length) {
-    dom.waterfallFeed.innerHTML = `<div class="capability-empty" role="row"><span role="cell">${escapeHtml(t("radar.notConnected", "未接入实时业务队列，不显示模拟流量。"))}</span></div>`;
+  const rows = (state.caseSummaries || []).slice(0, 20).map((item) => ({
+    time: formatUtc(item.updated_at),
+    ingress: "PERSISTED CASE",
+    asset: item.title,
+    decision: item.human_decision?.action || item.latest_machine_recommendation || "review",
+    route: item.status
+  }));
+  if (!rows.length) {
+    dom.waterfallFeed.innerHTML = `<div class="capability-empty" role="row"><span role="cell">${escapeHtml(t("radar.noCases", "尚无真实案件记录。"))}</span></div>`;
     return;
   }
-  dom.waterfallFeed.innerHTML = state.waterfallRows.map((row) => {
-    const high = row.decision === "HOLD";
-    const decisionClass = high ? "risk" : row.decision === "REVIEW" ? "caution" : "credible";
+  dom.waterfallFeed.innerHTML = rows.map((row) => {
+    const high = ["hold", "escalate"].includes(row.decision);
+    const decisionClass = high ? "risk" : ["review", "request_original"].includes(row.decision) ? "caution" : "credible";
     return `
       <div class="intercept-row ${high ? "high" : ""} ${row.fresh ? "new" : ""}" role="row">
         <span role="cell">${escapeHtml(row.time)}</span>
         <span role="cell">${escapeHtml(row.ingress)}</span>
         <span role="cell">${escapeHtml(row.asset)}</span>
-        <span role="cell" class="${decisionClass}"><i class="state-block ${decisionClass}"></i> ${escapeHtml(row.decision)}</span>
-        <span role="cell">${escapeHtml(row.route)}</span>
+        <span role="cell" class="${decisionClass}"><i class="state-block ${decisionClass}"></i> ${escapeHtml(humanDecisionLabel(row.decision))}</span>
+        <span role="cell">${escapeHtml(String(row.route).toUpperCase())}</span>
       </div>
     `;
   }).join("");
@@ -1043,42 +1635,88 @@ function bindReportControls() {
   dom.copyReportButton.addEventListener("click", copyReport);
 }
 
-function reportText(payload = state.activePayload) {
-  if (!payload) return t("report.none", "ShareGuard暂无可用案宗。");
+function canonicalCaseExport() {
+  const record = state.activeCaseRecord;
+  if (!record) throw new Error("NO PERSISTED CASE");
+  return {
+    schema: "shareguard.case.export.v2",
+    generated_at: new Date().toISOString(),
+    case_id: record.case_id,
+    title: record.title,
+    status: record.status,
+    created_at: record.created_at,
+    updated_at: record.updated_at,
+    sealed_at: record.sealed_at,
+    selected_version_id: state.selectedVersionId,
+    versions: (record.versions || []).map((version) => ({
+      version_id: version.version_id,
+      role: version.role,
+      file_name: version.file_name,
+      received_at: version.received_at,
+      media_sha256: version.media_sha256,
+      engine_release: version.engine_release,
+      decision_layer: version.decision_layer,
+      machine_recommendation: version.machine_recommendation,
+      model_score: version.model_score,
+      score_kind: version.score_kind,
+      decision_margin: version.decision_margin,
+      calibration: version.calibration,
+      latency_ms: version.latency_ms,
+      image: version.image,
+      report: version.report
+    })),
+    declared_provenance: record.declared_provenance,
+    annotations: record.annotations,
+    machine_recommendation: selectedVersion()?.machine_recommendation || null,
+    human_decision: record.human_decision,
+    feedback: record.feedback,
+    event_count: record.events?.length || 0,
+    chain_head: record.chain_head,
+    trust: {
+      package_schema: "shareguard.sgd.v2",
+      signature_state: record.status === "sealed" ? "server_signed" : "not_sealed",
+      media_storage: "detached_digest_only"
+    }
+  };
+}
+
+function reportText(bundle) {
+  if (!bundle) return t("report.none", "ShareGuard暂无可用案宗。");
+  const version = bundle.versions.find((item) => item.version_id === bundle.selected_version_id) || bundle.versions.at(-1) || {};
   return [
-    `${t("report.title", "ShareGuard影像鉴真报告")} / CASE #${state.activeCase.code}`,
-    `${t("report.decisionLabel", "处置结论")}：${decisionLabel(payload.decision)}`,
-    `${t("report.scoreLabel", "AI生成模型分数")}：${formatModelScore(payload.model_score)}`,
-    `${t("report.marginLabel", "决策余量")}：${formatModelScore(payload.decision_margin)}`,
-    `${t("report.scoreNoticeLabel", "分数说明")}：${payload.score_notice}`,
-    `${t("report.actionLabel", "建议动作")}：${payload.report.recommended_action}`,
-    `${t("report.testimonyLabel", "机器证词")}：${payload.report.summary}`,
-    `${t("report.statementLabel", "声明")}：${payload.report.disclaimer}`
+    `${t("report.title", "ShareGuard影像鉴真报告")} / CASE #${bundle.case_id}`,
+    `案件状态：${bundle.status}`,
+    `媒体 SHA-256：${version.media_sha256 || "—"}`,
+    `引擎版本：${version.engine_release || "—"}`,
+    `机器建议：${humanDecisionLabel(version.machine_recommendation)}`,
+    `人工决定：${humanDecisionLabel(bundle.human_decision?.action)}`,
+    `AI生成模型分数：${formatModelScore(version.model_score)}`,
+    `分数语义：${version.score_kind || "—"}`,
+    `事件链：${bundle.event_count} EVENTS / ${bundle.chain_head}`,
+    "说明：机器分数未经概率校准，仅作为风险筛查信号；人工决定为正式处置记录。"
   ].join("\n");
 }
 
-function buildReportHtml(payload = state.activePayload) {
-  if (!payload) throw new Error("NO LIVE MODEL RESULT");
-  const report = payload;
-  const sections = report.report.sections.map((section) => `
-    <section><h2>${escapeHtml(section.title || "记录")}</h2>${Array.isArray(section.items)
-      ? `<ul>${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
-      : `<p>${escapeHtml(section.body || "-")}</p>`}</section>
-  `).join("");
+function buildReportHtml(bundle) {
+  const version = bundle.versions.find((item) => item.version_id === bundle.selected_version_id) || bundle.versions.at(-1) || {};
+  const provenance = bundle.declared_provenance;
   return `<!doctype html>
 <html lang="${escapeHtml(i18n?.getLocale() || "zh-CN")}"><head><meta charset="utf-8"><title>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</title>
-<style>body{margin:40px;color:#1A1A1A;background:#F7F5F0;font-family:Arial,sans-serif;line-height:1.65}header,section{padding:18px 0;border-bottom:1px solid #1A1A1A}h1,h2{font-family:Georgia,serif}small{font-family:monospace}.risk{color:#D32F2F}</style></head>
-<body><header><small>CASE #${escapeHtml(state.activeCase.code)}</small><h1>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</h1></header>
-<section><h2 class="risk">${escapeHtml(decisionLabel(report.decision))}</h2><p>${escapeHtml(report.report.summary)}</p><p><strong>${escapeHtml(t("report.actionLabel", "建议动作"))}：</strong>${escapeHtml(report.report.recommended_action)}</p></section>
-${sections}<section><small>${escapeHtml(report.report.disclaimer)}</small></section></body></html>`;
+<style>body{margin:40px;color:#1a1a1a;background:#f7f5f0;font-family:Arial,sans-serif;line-height:1.55}header,section{padding:18px 0;border-bottom:1px solid #1a1a1a}h1,h2{font-family:Georgia,serif}small,dt{font-family:monospace}dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 28px}dt{font-size:11px;color:#666}dd{margin:3px 0;overflow-wrap:anywhere}.risk{color:#d32f2f}@media print{body{background:#fff;margin:20mm}}</style></head>
+<body><header><small>CASE #${escapeHtml(bundle.case_id)}</small><h1>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</h1><p>${escapeHtml(bundle.title)}</p></header>
+<section><h2 class="risk">${escapeHtml(humanDecisionLabel(bundle.human_decision?.action))}</h2><dl><div><dt>MACHINE RECOMMENDATION</dt><dd>${escapeHtml(humanDecisionLabel(version.machine_recommendation))}</dd></div><div><dt>MODEL SCORE</dt><dd>${escapeHtml(formatModelScore(version.model_score))}</dd></div><div><dt>ENGINE RELEASE</dt><dd>${escapeHtml(version.engine_release || "—")}</dd></div><div><dt>SCORE KIND</dt><dd>${escapeHtml(version.score_kind || "—")}</dd></div></dl></section>
+<section><h2>证据标识</h2><dl><div><dt>MEDIA SHA-256</dt><dd>${escapeHtml(version.media_sha256 || "—")}</dd></div><div><dt>CHAIN HEAD</dt><dd>${escapeHtml(bundle.chain_head)}</dd></div><div><dt>EVENTS</dt><dd>${escapeHtml(bundle.event_count)}</dd></div><div><dt>TRUST STATE</dt><dd>${escapeHtml(bundle.trust.signature_state)}</dd></div></dl></section>
+<section><h2>来源声明</h2><p>${provenance ? `${escapeHtml(provenance.channel)} / DECLARED UNVERIFIED / ${escapeHtml(provenance.source_url || "NO URL")}` : "未记录来源声明"}</p></section>
+<section><small>机器分数未经概率校准，仅作为风险筛查信号；人工决定为正式处置记录。服务器仅保留媒体摘要，不嵌入原始影像。</small></section></body></html>`;
 }
 
 function saveHtmlReport() {
-  downloadBlob(buildReportHtml(), `${reportFileStem()}.html`, "text/html;charset=utf-8");
-  addCustodyEvent("DESK-EDITOR", "HTML report exported", "APPENDED");
+  const bundle = canonicalCaseExport();
+  downloadBlob(buildReportHtml(bundle), `${reportFileStem()}.html`, "text/html;charset=utf-8");
 }
 
 function printReport() {
+  const bundle = canonicalCaseExport();
   const printWindow = window.open("", "_blank");
   if (!printWindow) {
     showToast("浏览器阻止了打印窗口，请允许弹出窗口后重试。");
@@ -1086,34 +1724,21 @@ function printReport() {
   }
   printWindow.opener = null;
   printWindow.document.open();
-  printWindow.document.write(buildReportHtml());
+  printWindow.document.write(buildReportHtml(bundle));
   printWindow.document.close();
   printWindow.addEventListener("load", () => printWindow.print(), { once: true });
-  addCustodyEvent("DESK-EDITOR", "Print/PDF report requested", "APPENDED");
 }
 
 function downloadJsonReport() {
-  const payload = {
-    case_id: state.activeCase.code,
-    generated_at: new Date().toISOString(),
-    decision: state.activePayload?.decision,
-    model_score: state.activePayload?.model_score,
-    score_kind: state.activePayload?.score_kind,
-    decision_margin: state.activePayload?.decision_margin,
-    score_notice: state.activePayload?.score_notice,
-    localization: state.activePayload?.localization,
-    provenance: state.activePayload?.provenance,
-    report: state.activePayload?.report
-  };
-  downloadBlob(JSON.stringify(payload, null, 2), `${reportFileStem()}.json`, "application/json");
-  addCustodyEvent("DESK-EDITOR", "Sanitized JSON report exported", "APPENDED");
+  const bundle = canonicalCaseExport();
+  downloadBlob(JSON.stringify(bundle, null, 2), `${reportFileStem()}.json`, "application/json");
 }
 
 async function copyReport() {
   try {
-    await navigator.clipboard.writeText(reportText());
+    const bundle = canonicalCaseExport();
+    await navigator.clipboard.writeText(reportText(bundle));
     showToast(t("toast.reportCopied", "案宗摘要已复制。"));
-    addCustodyEvent("DESK-EDITOR", "Decision brief copied", "APPENDED");
   } catch {
     showToast(t("toast.clipboardFailed", "当前浏览器无法写入剪贴板。"));
   }
@@ -1137,70 +1762,62 @@ function downloadBlob(content, filename, type) {
 
 function bindReviewerControls() {
   dom.openReviewerButton.addEventListener("click", () => switchView("reviewer"));
-  dom.reviewForm.addEventListener("submit", (event) => {
+  dom.reviewForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = dom.reviewerComment.value.trim();
     if (!text) return;
-    const note = {
-      time: new Date().toISOString().slice(11, 16),
-      actor: "Reviewer",
-      text
-    };
-    state.reviewerNotes.push(note);
+    const selected = state.annotations.find((item) => annotationId(item) === state.selectedAnnotationId);
+    if (!selected) {
+      showToast("请先在案宗影像上选择或框选一个人工标注。" );
+      return;
+    }
+    selected.note = text;
+    selected.detail = text;
+    dom.annotationNote.value = text;
     dom.reviewerComment.value = "";
-    persistReviewerNotes();
-    renderReviewerNotes();
-    addCustodyEvent("REVIEWER", `Marginalia added: ${text.slice(0, 80)}`, "APPENDED");
-    showToast(t("toast.reviewSaved", "旁注已写入保全日志。"));
+    await saveReviewerAnnotations();
   });
 }
 
 function renderReviewer(payload = state.activePayload) {
   if (!payload) return;
   dom.reviewerTitle.textContent = `CASE #${state.activeCase.code}`;
-  dom.reviewerVerdict.textContent = payload.decision === "hold" ? "SUSPEND PUBLICATION" : payload.decision === "review" ? "HUMAN REVIEW REQUIRED" : "RELEASE APPROVED";
+  dom.reviewerVerdict.textContent = state.activeCaseRecord?.human_decision
+    ? `HUMAN / ${humanDecisionLabel(state.activeCaseRecord.human_decision.action).toUpperCase()}`
+    : `MACHINE / ${humanDecisionLabel(payload.decision).toUpperCase()}`;
   dom.reviewerNarrative.textContent = payload.report.summary;
-  dom.reviewerImage.src = state.currentDataUrl;
+  if (state.currentDataUrl) {
+    dom.reviewerImage.src = state.currentDataUrl;
+    dom.reviewerImage.hidden = false;
+  } else {
+    dom.reviewerImage.removeAttribute("src");
+    dom.reviewerImage.hidden = true;
+  }
+  renderReviewerNotes();
 }
 
 function renderReviewerNotes() {
   if (!dom.reviewThread) return;
-  dom.reviewThread.innerHTML = state.reviewerNotes.map((note) => `
+  const annotations = state.annotations || [];
+  if (!annotations.length) {
+    dom.reviewThread.innerHTML = '<div class="capability-empty">尚无人工标注。</div>';
+    return;
+  }
+  dom.reviewThread.innerHTML = annotations.map((annotation, index) => `
     <article class="review-note">
-      <time>${escapeHtml(note.time)} / ${escapeHtml(note.actor)}</time>
-      <p>${escapeHtml(note.key ? t(note.key, note.text) : note.text)}</p>
+      <time>R${index + 1} / HUMAN REVIEWER</time>
+      <p>${escapeHtml(annotation.note || annotation.detail || "未填写说明")}</p>
     </article>
   `).join("");
 }
 
-function persistReviewerNotes() {
-  try {
-    window.localStorage.setItem("shareguard-review-notes", JSON.stringify(state.reviewerNotes.slice(-20)));
-  } catch {
-    // Controlled review remains usable when storage is unavailable.
-  }
-}
-
-function loadStoredReviewerNotes() {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem("shareguard-review-notes") || "null");
-    if (Array.isArray(stored) && stored.length) {
-      state.reviewerNotes = stored.filter((note) => note && note.text && note.actor).slice(-20);
-      renderReviewerNotes();
-    }
-  } catch {
-    // Ignore malformed local review state.
-  }
-}
-
 function bindDialogControls() {
-  dom.forceReleaseButton.addEventListener("click", () => dom.releaseDialog.showModal());
-  dom.releaseDialog.addEventListener("close", () => {
-    if (dom.releaseDialog.returnValue !== "confirm") return;
-    addCustodyEvent("DESK-EDITOR", "Human override recorded; model decision remains unchanged", "OVERRIDE");
-    dom.recommendedAction.textContent = t("release.overrideAction", "人工覆盖：允许使用，保留原始系统结论");
-    showToast(t("toast.override", "人工覆盖已记录，模型结论未被修改。"));
-  });
+  dom.forceReleaseButton.addEventListener("click", () => dom.decisionDialog.showModal());
+  dom.feedbackButton.addEventListener("click", () => dom.feedbackDialog.showModal());
+  dom.closeDecisionButton.addEventListener("click", () => dom.decisionDialog.close());
+  dom.closeFeedbackButton.addEventListener("click", () => dom.feedbackDialog.close());
+  dom.decisionForm.addEventListener("submit", submitHumanDecision);
+  dom.feedbackForm.addEventListener("submit", submitOutcomeFeedback);
   dom.sealButton.addEventListener("click", runSealingRitual);
   dom.downloadSgdButton.addEventListener("click", () => {
     if (!state.evidencePackageBlob) return;
@@ -1246,7 +1863,7 @@ async function connectPrivateModel(event) {
   const username = dom.modelUsername.value.trim();
   const password = dom.modelPassword.value;
   if (!username || !password) {
-    setModelConnectionStatus("error", t("model.credentialsRequired", "请输入演示账号和访问密码。"));
+    setModelConnectionStatus("error", t("model.credentialsRequired", "请输入访问账号和访问密码。"));
     return;
   }
 
@@ -1257,30 +1874,8 @@ async function connectPrivateModel(event) {
   setModelConnectionStatus("connecting", t("model.connecting", "正在验证云端推理网关…"));
 
   try {
-    const response = await fetch(privateApiUrl("/v1/ready"), {
-      method: "GET",
-      headers: {
-        "Accept": "application/json",
-        "Authorization": basicAuthorization(username, password)
-      },
-      cache: "no-store",
-      credentials: "omit",
-      mode: "cors",
-      referrerPolicy: "no-referrer"
-    });
-    if (response.status === 401) {
-      throw new ModelConnectionError(
-        "credentials",
-        t("model.invalid", "账号或密码无效，请重新输入。")
-      );
-    }
-    if (!response.ok) {
-      throw new ModelConnectionError(
-        "gateway",
-        `${t("model.unavailable", "云端推理网关暂不可用。")} HTTP ${response.status}`
-      );
-    }
-    const payload = await response.json();
+    apiClient?.setCredentials(username, password);
+    const payload = await apiClient.ready();
     if (payload.status !== "ready") {
       throw new ModelConnectionError(
         "gateway",
@@ -1296,6 +1891,7 @@ async function connectPrivateModel(event) {
     setModelConnectionStatus("connected", t("model.connected", "连接成功，真实模型推理已启用。"));
     renderModelConnectionState();
     showToast(t("model.connected", "连接成功，真实模型推理已启用。"));
+    await refreshPersistentWorkbench({ preserveCase: true });
 
     const shouldResume = modelConnection.pendingAnalysis;
     modelConnection.pendingAnalysis = false;
@@ -1304,6 +1900,7 @@ async function connectPrivateModel(event) {
       await analyzeCurrentFile();
     }
   } catch (error) {
+    apiClient?.clearCredentials();
     modelConnection.username = "";
     modelConnection.password = "";
     modelConnection.connected = false;
@@ -1311,7 +1908,9 @@ async function connectPrivateModel(event) {
     dom.modelPassword.value = "";
     setModelConnectionStatus(
       "error",
-      error instanceof ModelConnectionError
+      error?.status === 401
+        ? t("model.invalid", "账号或密码无效，请重新输入。")
+        : error instanceof ModelConnectionError
         ? error.message
         : t("model.networkError", "无法连接云端推理网关，请稍后重试。")
     );
@@ -1323,6 +1922,7 @@ async function connectPrivateModel(event) {
 }
 
 function disconnectPrivateModel() {
+  apiClient?.clearCredentials();
   modelConnection.username = "";
   modelConnection.password = "";
   modelConnection.connected = false;
@@ -1418,15 +2018,18 @@ async function runSealingRitual() {
       { type: "application/vnd.shareguard.dossier+json" }
     );
     state.evidencePackageName = `${reportFileStem()}.sgd`;
+    state.activeCaseRecord = evidencePackage.case;
+    if (state.activePayload) state.activePayload.case = evidencePackage.case;
+    renderPersistentCase(evidencePackage.case);
     dom.sealTitle.textContent = t("seal.complete", "证据包已签封");
     dom.sealResult.hidden = false;
     dom.custodySeal.textContent = evidencePackage.payload_sha256.slice(0, 12).toUpperCase();
-    addCustodyEvent("SEAL-SERVICE", `Trusted evidence package issued: ${evidencePackage.payload_sha256.slice(0, 16)}`, "SEALED");
   } catch (error) {
     await appendSealLog(`[ERROR] ${String(error?.message || "SIGNING FAILED")}`);
     dom.sealTitle.textContent = t("seal.failed", "签封失败");
   } finally {
-    dom.sealButton.disabled = false;
+    dom.sealButton.disabled = state.activeCaseRecord?.status === "sealed"
+      || !state.activeCaseRecord?.human_decision;
   }
 }
 
@@ -1441,31 +2044,7 @@ async function requestServerEvidencePackage() {
   const caseId = state.activePayload?.case_id || state.activeCaseRecord?.case_id;
   if (!caseId) throw new Error("PERSISTED CASE REQUIRED");
   if (!state.activeCaseRecord?.human_decision) throw new Error("STRUCTURED HUMAN DECISION REQUIRED");
-  const headers = {
-    "Accept": "application/vnd.shareguard.dossier+json, application/json",
-    "Content-Type": "application/json"
-  };
-  if (usesRemoteModel()) {
-    headers.Authorization = basicAuthorization(modelConnection.username, modelConnection.password);
-  }
-  const response = await fetch(
-    usesRemoteModel()
-      ? privateApiUrl(`/v1/cases/${encodeURIComponent(caseId)}/seal`)
-      : `/v1/cases/${encodeURIComponent(caseId)}/seal`,
-    {
-      method: "POST",
-      headers,
-      body: "{}",
-      cache: "no-store",
-      credentials: "omit",
-      mode: usesRemoteModel() ? "cors" : "same-origin",
-      referrerPolicy: "no-referrer"
-    }
-  );
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || `SEAL SERVICE HTTP ${response.status}`);
-  }
+  const payload = await apiClient.sealCase(caseId);
   if (
     payload?.schema !== "shareguard.sgd.v2"
     || !payload.payload_sha256
@@ -1576,6 +2155,63 @@ async function refreshLocalizedView() {
 function formatModelScore(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? `${clamp(numeric, 0, 1).toFixed(3)} / 1.000` : "—";
+}
+
+function selectedVersion() {
+  return state.activeCaseRecord?.versions?.find((item) => item.version_id === state.selectedVersionId)
+    || state.activeCaseRecord?.versions?.at(-1)
+    || null;
+}
+
+async function sha256Blob(blob) {
+  if (!window.crypto?.subtle) throw new Error("WEB CRYPTO API UNAVAILABLE");
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function shortCaseId(caseId) {
+  const value = String(caseId || "PENDING");
+  return value.startsWith("sg_case_") ? `SG-${value.slice(-8).toUpperCase()}` : value.toUpperCase();
+}
+
+function formatUtc(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
+
+function toLocalDateTimeValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function humanDecisionLabel(action) {
+  return ({
+    allow: "允许使用",
+    review: "人工复核",
+    request_original: "索取原件",
+    escalate: "升级复核",
+    hold: "暂缓发布"
+  })[String(action)] || "待人工决定";
+}
+
+function feedbackOutcomeLabel(outcome) {
+  return ({
+    confirmed_real: "确认真实",
+    confirmed_generated: "确认生成",
+    unresolved: "仍未解决"
+  })[String(outcome)] || "尚未反馈";
+}
+
+function showApiError(error, fallback) {
+  const detail = error?.code === "rate_limited" && error?.retryAfter
+    ? `请在 ${error.retryAfter} 秒后重试。`
+    : String(error?.message || "");
+  showToast(`${fallback}${detail ? ` ${detail}` : ""}`);
 }
 
 function formatBytes(bytes) {
