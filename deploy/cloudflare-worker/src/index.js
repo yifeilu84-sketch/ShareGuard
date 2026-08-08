@@ -4,6 +4,12 @@ import {
   publicTrustRoot,
   signEvidence,
 } from "./evidence.js";
+import {
+  deletePrivateMedia,
+  privateMediaReady,
+  readPrivateMedia,
+  storePrivateMedia,
+} from "./media-store.js";
 
 export { ShareGuardCaseStore };
 
@@ -17,6 +23,7 @@ const STATIC_ROUTES = new Map([
   ["/v1/metrics", { kind: "case_store", methods: new Set(["GET"]) }],
 ]);
 const CASE_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})(?:\/(decision|annotations|provenance|feedback|workflow|comments|seal))?$/;
+const CASE_MEDIA_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})\/versions\/(sg_ver_[0-9a-f]{32})\/media$/;
 
 const EDGE_CLIENT_ID_HEADER = "X-ShareGuard-Client-Id";
 const LEGACY_EDGE_SECRET_HEADER = "X-ShareGuard-Edge-Secret";
@@ -90,6 +97,9 @@ function routeFor(pathname) {
   if (staticRoute) {
     return staticRoute;
   }
+  if (CASE_MEDIA_ROUTE.test(pathname)) {
+    return { kind: "media", methods: new Set(["GET"]) };
+  }
   const match = pathname.match(CASE_ROUTE);
   if (!match) {
     return null;
@@ -97,6 +107,45 @@ function routeFor(pathname) {
   return {
     kind: "case_store",
     methods: new Set([match[2] ? "POST" : "GET", ...(match[2] ? [] : ["DELETE"])]),
+  };
+}
+
+
+function randomOpaqueId(prefix) {
+  return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+
+function mediaCustodyRequired(env) {
+  return String(env.MEDIA_CUSTODY_REQUIRED || "").toLowerCase() === "true";
+}
+
+
+async function uploadedMedia(request, env, fileName) {
+  const contentTypeHeader = String(request.headers.get("Content-Type") || "");
+  let blob;
+  if (contentTypeHeader.toLowerCase().startsWith("multipart/form-data")) {
+    const form = await request.formData();
+    blob = form.get("image");
+    if (!(blob instanceof Blob)) {
+      throw new Error("media upload is missing");
+    }
+  } else {
+    blob = await request.blob();
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const configuredMax = Number.parseInt(String(env.MEDIA_MAX_BYTES || "8388608"), 10);
+  const maxBytes = Number.isSafeInteger(configuredMax) && configuredMax > 0
+    ? configuredMax
+    : 8_388_608;
+  if (!bytes.length || bytes.length > maxBytes) {
+    throw new Error("media upload size is invalid");
+  }
+  const contentType = String(blob.type || contentTypeHeader.split(";", 1)[0]).toLowerCase();
+  return {
+    bytes,
+    contentType,
+    fileName: String(blob.name || fileName || "upload"),
   };
 }
 
@@ -473,6 +522,76 @@ async function sealCase(request, env, actorId, origin) {
 }
 
 
+async function servePrivateMedia(request, env, actorId, origin) {
+  const match = new URL(request.url).pathname.match(CASE_MEDIA_ROUTE);
+  if (!match) {
+    return jsonResponse(404, "not_found", "Route not found.", origin, env);
+  }
+  const [, caseId, versionId] = match;
+  const stored = await callCaseStore(env, actorId, `/cases/${caseId}`);
+  const payload = await stored.json();
+  if (!stored.ok || !payload.case) {
+    return jsonPayloadResponse(payload, stored.status || 503, origin, env);
+  }
+  const version = payload.case.versions?.find(item => item.version_id === versionId);
+  if (!version) {
+    return jsonResponse(404, "version_not_found", "Version not found.", origin, env);
+  }
+  if (version.media_custody?.status !== "encrypted_private") {
+    return jsonResponse(
+      409,
+      "media_not_available",
+      "This case version contains a detached digest only.",
+      origin,
+      env,
+    );
+  }
+  const media = await readPrivateMedia(env, {
+    actorId,
+    caseId,
+    versionId,
+    custody: version.media_custody,
+  });
+  return new Response(media.bytes, {
+    status: 200,
+    headers: {
+      "Cache-Control": "private, no-store",
+      "Content-Type": media.contentType,
+      "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(media.fileName)}`,
+      "X-Content-Type-Options": "nosniff",
+      "X-ShareGuard-Media-SHA256": media.sha256,
+      ...corsHeaders(origin, env),
+    },
+  });
+}
+
+
+async function deleteCaseAndMedia(request, env, actorId, origin) {
+  const requestUrl = new URL(request.url);
+  const internalPath = requestUrl.pathname.replace(/^\/v1/, "");
+  const deleted = await callCaseStore(env, actorId, internalPath, { method: "DELETE" });
+  let payload;
+  try {
+    payload = await deleted.json();
+  } catch {
+    return jsonResponse(503, "case_store_unavailable", "Case could not be deleted.", origin, env);
+  }
+  if (!deleted.ok || !payload.deleted) {
+    return jsonPayloadResponse(payload, deleted.status || 503, origin, env);
+  }
+  for (const version of payload.media_versions || []) {
+    if (version.custody_status === "encrypted_private") {
+      await deletePrivateMedia(env, {
+        actorId,
+        caseId: payload.case_id,
+        versionId: version.version_id,
+      });
+    }
+  }
+  return jsonPayloadResponse(payload, 200, origin, env);
+}
+
+
 async function consumeDurableQuota(env, clientId) {
   const objectId = env.RATE_LIMITER.idFromName(clientId);
   const response = await env.RATE_LIMITER.get(objectId).fetch(
@@ -548,7 +667,7 @@ function proxiedResponse(response, origin, env) {
 }
 
 
-async function persistAnalysis(request, response, env, actorId, origin, caseTitle) {
+async function persistAnalysis(request, mediaRequest, response, env, actorId, origin, caseTitle) {
   if (!response.ok) {
     return proxiedResponse(response, origin, env);
   }
@@ -580,15 +699,51 @@ async function persistAnalysis(request, response, env, actorId, origin, caseTitl
     analysis.report?.subject?.file_name ||
     "upload",
   ).trim();
+  const caseId = requestedCaseId || randomOpaqueId("sg_case");
+  const versionId = randomOpaqueId("sg_ver");
+  let mediaCustody = null;
+  if (privateMediaReady(env)) {
+    try {
+      const media = await uploadedMedia(mediaRequest, env, fileName);
+      mediaCustody = await storePrivateMedia(env, {
+        actorId,
+        caseId,
+        versionId,
+        bytes: media.bytes,
+        contentType: media.contentType,
+        fileName: media.fileName,
+        expectedSha256: analysis.media_sha256,
+      });
+    } catch {
+      return jsonResponse(
+        503,
+        "media_custody_unavailable",
+        "Private media could not be validated and stored.",
+        origin,
+        env,
+      );
+    }
+  } else if (mediaCustodyRequired(env)) {
+    return jsonResponse(
+      503,
+      "media_custody_unavailable",
+      "Private media custody is temporarily unavailable.",
+      origin,
+      env,
+    );
+  }
 
   const stored = await callCaseStore(env, actorId, "/ingest", {
     method: "POST",
     payload: {
       analysis,
       case_id: requestedCaseId || null,
+      new_case_id: requestedCaseId ? null : caseId,
+      version_id: versionId,
       version_role: versionRole,
       title,
       file_name: fileName,
+      media_custody: mediaCustody,
     },
   });
   let storedPayload;
@@ -604,6 +759,9 @@ async function persistAnalysis(request, response, env, actorId, origin, caseTitl
     );
   }
   if (!stored.ok || !storedPayload.case) {
+    if (mediaCustody) {
+      await deletePrivateMedia(env, { actorId, caseId, versionId });
+    }
     return jsonPayloadResponse(
       storedPayload,
       stored.status || 503,
@@ -671,6 +829,8 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
       status: "ok",
       gateway: "ready",
       case_store: env.CASE_STORE ? "ready" : "unavailable",
+      private_media: privateMediaReady(env) ? "ready" : "unavailable",
+      private_media_required: mediaCustodyRequired(env),
       inference: "check_v1_ready",
     }, 200, origin, env);
   }
@@ -690,9 +850,24 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
     if (route.kind === "trust_root") {
       return jsonPayloadResponse(publicTrustRoot(env), 200, origin, env);
     }
+    if (route.kind === "media") {
+      return await servePrivateMedia(request, env, actorId, origin);
+    }
+    if (route.kind === "media") {
+      return jsonResponse(
+        503,
+        "media_custody_unavailable",
+        "Private media is temporarily unavailable.",
+        origin,
+        env,
+      );
+    }
     if (route.kind === "case_store") {
       if (requestUrl.pathname.endsWith("/seal")) {
         return await sealCase(request, env, actorId, origin);
+      }
+      if (request.method === "DELETE") {
+        return await deleteCaseAndMedia(request, env, actorId, origin);
       }
       return await proxyCaseStore(request, env, actorId, origin);
     }
@@ -739,12 +914,14 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
       }
     }
 
+    const mediaRequest = route.kind === "analyze" ? request.clone() : null;
     const response = await fetchImpl(
       upstreamRequest(request, modalOrigin, { clientId, timestamp, signature }),
     );
     if (route.kind === "analyze") {
       return await persistAnalysis(
         request,
+        mediaRequest,
         response,
         env,
         actorId,

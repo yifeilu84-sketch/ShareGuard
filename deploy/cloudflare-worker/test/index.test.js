@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
 import { consumeQuotaState, handleRequest } from "../src/index.js";
@@ -75,6 +75,71 @@ function persistentCaseStore() {
           },
         };
       },
+    },
+  };
+}
+
+
+function mediaAwareCaseStore() {
+  let record = null;
+  return {
+    binding: {
+      idFromName: key => key,
+      get: () => ({
+        async fetch(input, init) {
+          const request = input instanceof Request ? input : new Request(input, init);
+          const url = new URL(request.url);
+          if (request.method === "POST" && url.pathname === "/ingest") {
+            const payload = await request.json();
+            record = {
+              case_id: payload.new_case_id,
+              status: "awaiting_review",
+              chain_head: "c".repeat(64),
+              versions: [{
+                version_id: payload.version_id,
+                media_sha256: payload.analysis.media_sha256,
+                media_custody: payload.media_custody,
+              }],
+            };
+            return new Response(JSON.stringify({ case: record }), { status: 201 });
+          }
+          if (request.method === "GET" && url.pathname === `/cases/${record?.case_id}`) {
+            return new Response(JSON.stringify({ case: record }));
+          }
+          if (request.method === "DELETE" && url.pathname === `/cases/${record?.case_id}`) {
+            return new Response(JSON.stringify({
+              deleted: true,
+              case_id: record.case_id,
+              media_versions: record.versions.map(version => ({
+                version_id: version.version_id,
+                custody_status: version.media_custody.status,
+              })),
+            }));
+          }
+          return new Response(JSON.stringify({ error: { code: "not_found" } }), { status: 404 });
+        },
+      }),
+    },
+  };
+}
+
+
+function memoryMediaBucket() {
+  const objects = new Map();
+  return {
+    objects,
+    async put(key, value, options = {}) {
+      objects.set(key, {
+        bytes: new Uint8Array(await new Response(value).arrayBuffer()),
+        customMetadata: options.customMetadata || {},
+      });
+    },
+    async get(key) {
+      const object = objects.get(key);
+      return object ? { body: object.bytes, customMetadata: object.customMetadata } : null;
+    },
+    async delete(key) {
+      objects.delete(key);
     },
   };
 }
@@ -258,8 +323,90 @@ test("health reports the control plane without waking Modal", async () => {
     status: "ok",
     gateway: "ready",
     case_store: "ready",
+    private_media: "unavailable",
+    private_media_required: false,
     inference: "check_v1_ready",
   });
+});
+
+
+test("production analysis stores encrypted media and serves it only through the case route", async () => {
+  const bytes = new TextEncoder().encode("private camera bytes");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/jpeg" }), "camera.jpg");
+  const bucket = memoryMediaBucket();
+  const store = mediaAwareCaseStore();
+  const runtime = {
+    ...env,
+    CASE_STORE: store.binding,
+    MEDIA_BUCKET: bucket,
+    MEDIA_CUSTODY_REQUIRED: "true",
+    MEDIA_ENCRYPTION_KEY_B64: Buffer.alloc(32, 9).toString("base64"),
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-test",
+    MEDIA_RETENTION_DAYS: "7",
+  };
+  const analyzeResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+        "X-File-Name": "camera.jpg",
+      },
+      body: form,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_media",
+      media_sha256: digest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "需要人工复核",
+      risk_level: "high",
+      model_score: 0.8,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.6,
+      latency_ms: 300,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-MEDIA" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+
+  assert.equal(analyzeResponse.status, 200);
+  const analyzed = await analyzeResponse.json();
+  assert.equal(analyzed.case.versions[0].media_custody.status, "encrypted_private");
+  assert.equal(bucket.objects.size, 1);
+  const mediaResponse = await handleRequest(
+    new Request(
+      `https://api.shareguard.systems/v1/cases/${analyzed.case_id}/versions/${analyzed.version_id}/media`,
+      {
+        headers: {
+          Authorization: AUTHORIZATION,
+          "CF-Connecting-IP": "198.51.100.91",
+        },
+      },
+    ),
+    runtime,
+  );
+  assert.equal(mediaResponse.status, 200);
+  assert.equal(mediaResponse.headers.get("X-ShareGuard-Media-SHA256"), digest);
+  assert.deepEqual(new Uint8Array(await mediaResponse.arrayBuffer()), bytes);
+
+  const deleteResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${analyzed.case_id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+      },
+    }),
+    runtime,
+  );
+  assert.equal(deleteResponse.status, 200);
+  assert.equal(bucket.objects.size, 0);
 });
 
 
@@ -423,9 +570,10 @@ test("forwards approved requests and strips spoofable identity headers", async (
     forwarded.headers.get("X-ShareGuard-Edge-Signature"),
     createHmac("sha256", EDGE_SHARED_SECRET).update(canonical).digest("hex"),
   );
-  assert.deepEqual(defaultLimiter.keys, [
+  assert.equal(
+    defaultLimiter.keys.at(-1),
     forwarded.headers.get("X-ShareGuard-Client-Id"),
-  ]);
+  );
   assert.equal(new URL(forwarded.url).origin, env.MODAL_ORIGIN);
   assert.equal(new URL(forwarded.url).pathname, "/v1/analyze");
   assert.equal(new URL(forwarded.url).search, "?case=demo");

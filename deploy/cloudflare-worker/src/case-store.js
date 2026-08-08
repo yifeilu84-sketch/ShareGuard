@@ -174,6 +174,20 @@ export function migrateCaseRecord(record) {
   const createdAt = next.created_at || new Date(0).toISOString();
   next.schema = "shareguard.case.v3";
   next.status = legacyStatus(next);
+  for (const version of next.versions || []) {
+    if (!version.media_custody) {
+      version.media_custody = {
+        status: "detached_digest_only",
+        plaintext_sha256: version.media_sha256,
+        byte_size: null,
+        content_type: "",
+        file_name: version.file_name,
+        stored_at: null,
+        retention_until: null,
+        encryption: null,
+      };
+    }
+  }
   if (!next.workflow || typeof next.workflow !== "object") {
     next.workflow = initialWorkflow(firstVersion, createdAt, fallbackActor);
     if (CLOSED_STATUSES.has(next.status)) {
@@ -389,6 +403,59 @@ function sanitizeAnalysis(analysis) {
 }
 
 
+function sanitizeMediaCustody(value, analysis, fileName) {
+  if (!value || value.status !== "encrypted_private") {
+    return {
+      status: "detached_digest_only",
+      plaintext_sha256: analysis.media_sha256,
+      byte_size: null,
+      content_type: "",
+      file_name: fileName,
+      stored_at: null,
+      retention_until: null,
+      encryption: null,
+    };
+  }
+  const digest = String(value.plaintext_sha256 || "").toLowerCase();
+  if (digest !== analysis.media_sha256) {
+    throw new CaseStoreError(400, "invalid_media_custody", "Media custody digest is invalid.");
+  }
+  const byteSize = Number.parseInt(String(value.byte_size), 10);
+  if (!Number.isSafeInteger(byteSize) || byteSize < 1 || byteSize > 50_000_000) {
+    throw new CaseStoreError(400, "invalid_media_custody", "Media custody size is invalid.");
+  }
+  const contentType = boundedText(value.content_type, "media.content_type", 64, { required: true });
+  if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(contentType)) {
+    throw new CaseStoreError(400, "invalid_media_custody", "Media custody type is invalid.");
+  }
+  const storedAt = currentTimestamp(value.stored_at);
+  const retentionUntil = currentTimestamp(value.retention_until);
+  const encryption = value.encryption || {};
+  if (encryption.algorithm !== "AES-256-GCM") {
+    throw new CaseStoreError(400, "invalid_media_custody", "Media custody encryption is invalid.");
+  }
+  return {
+    status: "encrypted_private",
+    plaintext_sha256: digest,
+    byte_size: byteSize,
+    content_type: contentType,
+    file_name: boundedText(value.file_name || fileName, "media.file_name", 255, { required: true }),
+    stored_at: storedAt,
+    retention_until: retentionUntil,
+    encryption: {
+      algorithm: "AES-256-GCM",
+      key_version: boundedText(
+        encryption.key_version,
+        "media.encryption.key_version",
+        64,
+        { required: true },
+      ),
+      iv: boundedText(encryption.iv, "media.encryption.iv", 64, { required: true }),
+    },
+  };
+}
+
+
 function versionFromAnalysis(analysis, context, timestamp) {
   const sanitized = sanitizeAnalysis(analysis);
   const versionId = requiredId(
@@ -400,17 +467,19 @@ function versionFromAnalysis(analysis, context, timestamp) {
   if (!VERSION_ROLES.has(role)) {
     throw new CaseStoreError(400, "invalid_field", "version_role is invalid.");
   }
+  const fileName = boundedText(
+    context.fileName || sanitized.report?.subject?.file_name || "upload",
+    "file_name",
+    255,
+    { required: true },
+  );
   return {
     version_id: versionId,
     role,
-    file_name: boundedText(
-      context.fileName || sanitized.report?.subject?.file_name || "upload",
-      "file_name",
-      255,
-      { required: true },
-    ),
+    file_name: fileName,
     received_at: timestamp,
     ...sanitized,
+    media_custody: sanitizeMediaCustody(context.mediaCustody, sanitized, fileName),
   };
 }
 
@@ -429,6 +498,7 @@ function versionEventPayload(version) {
     score_kind: version.score_kind,
     decision_margin: version.decision_margin,
     latency_ms: version.latency_ms,
+    media_custody_status: version.media_custody.status,
   };
 }
 
@@ -567,6 +637,7 @@ export async function applyCaseCommand(record, command, context = {}) {
       versionId: payload.version_id,
       versionRole: payload.version_role,
       fileName: payload.file_name,
+      mediaCustody: payload.media_custody,
     }, timestamp);
     if (next.versions.some(item => item.media_sha256 === version.media_sha256)) {
       throw new CaseStoreError(
@@ -1013,6 +1084,7 @@ export class ShareGuardCaseStore {
               version_id: payload.version_id,
               version_role: payload.version_role,
               file_name: payload.file_name,
+              media_custody: payload.media_custody,
             },
           }, { actorId });
           await transaction.put(key, next);
@@ -1023,6 +1095,7 @@ export class ShareGuardCaseStore {
           versionId: payload.version_id,
           versionRole: payload.version_role,
           fileName: payload.file_name,
+          mediaCustody: payload.media_custody,
           title: payload.title,
           actorId,
         });
@@ -1080,7 +1153,14 @@ export class ShareGuardCaseStore {
           throw new CaseStoreError(409, "case_sealed", "A sealed case cannot be deleted.");
         }
         await this.state.storage.delete(key);
-        return internalJson({ deleted: true, case_id: caseId });
+        return internalJson({
+          deleted: true,
+          case_id: caseId,
+          media_versions: (record.versions || []).map(version => ({
+            version_id: version.version_id,
+            custody_status: version.media_custody?.status || "detached_digest_only",
+          })),
+        });
       }
       if (request.method === "POST" && segments.length === 3) {
         const commandType = {
