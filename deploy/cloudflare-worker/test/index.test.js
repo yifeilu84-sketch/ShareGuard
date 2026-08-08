@@ -27,7 +27,59 @@ function allowAllLimiter() {
 }
 
 
+function persistentCaseStore() {
+  const keys = [];
+  const calls = [];
+  const caseId = `sg_case_${"a".repeat(32)}`;
+  const versionId = `sg_ver_${"b".repeat(32)}`;
+  return {
+    keys,
+    calls,
+    binding: {
+      idFromName(key) {
+        keys.push(key);
+        return key;
+      },
+      get() {
+        return {
+          async fetch(input, init) {
+            const request = input instanceof Request
+              ? input
+              : new Request(input, init);
+            const url = new URL(request.url);
+            let payload = null;
+            if (request.method === "POST") {
+              payload = await request.json();
+            }
+            calls.push({ method: request.method, path: url.pathname, payload });
+            if (url.pathname === "/ingest") {
+              return new Response(JSON.stringify({
+                case: {
+                  case_id: caseId,
+                  status: "open",
+                  chain_head: "c".repeat(64),
+                  versions: [{ version_id: versionId }],
+                },
+              }), { status: 201 });
+            }
+            if (url.pathname === "/cases") {
+              return new Response(JSON.stringify({
+                cases: [{ case_id: caseId, status: "open" }],
+              }));
+            }
+            return new Response(JSON.stringify({
+              case: { case_id: caseId, status: "open" },
+            }));
+          },
+        };
+      },
+    },
+  };
+}
+
+
 const defaultLimiter = allowAllLimiter();
+const defaultCaseStore = persistentCaseStore();
 const EDGE_SHARED_SECRET = "edge-secret-for-tests";
 const AUTHORIZATION = "Basic dGVzdDp0ZXN0";
 const env = {
@@ -38,6 +90,7 @@ const env = {
     .update(AUTHORIZATION)
     .digest("hex"),
   RATE_LIMITER: defaultLimiter.binding,
+  CASE_STORE: defaultCaseStore.binding,
 };
 
 
@@ -90,6 +143,30 @@ test("rejects paths and methods outside the public API", async () => {
 });
 
 
+test("health reports the control plane without waking Modal", async () => {
+  let upstreamCalled = false;
+  const response = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/health", {
+      headers: { Origin: env.ALLOWED_ORIGIN },
+    }),
+    env,
+    async () => {
+      upstreamCalled = true;
+      return new Response("unexpected");
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(upstreamCalled, false);
+  assert.deepEqual(await response.json(), {
+    status: "ok",
+    gateway: "ready",
+    case_store: "ready",
+    inference: "check_v1_ready",
+  });
+});
+
+
 test("forwards approved requests and strips spoofable identity headers", async () => {
   let forwarded;
   const response = await handleRequest(
@@ -113,7 +190,22 @@ test("forwards approved requests and strips spoofable identity headers", async (
     env,
     async request => {
       forwarded = request;
-      return new Response('{"status":"ok"}', {
+      return new Response(JSON.stringify({
+        request_id: "sg_req_test",
+        media_sha256: "d".repeat(64),
+        engine_release: "shareguard-screening-2026.08",
+        detector_engine: "shareguard-protected-screening-engine",
+        decision_layer: "shareguard-editorial-policy-v2",
+        machine_recommendation: "review",
+        decision_label: "需要人工复核",
+        risk_level: "high",
+        model_score: 0.91,
+        score_kind: "uncalibrated_ai_generation_score",
+        decision_margin: 0.82,
+        latency_ms: 512,
+        image: { width: 1, height: 1, format: "JPEG" },
+        report: { report_id: "SG-TEST" },
+      }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -166,6 +258,93 @@ test("forwards approved requests and strips spoofable identity headers", async (
     [1, 2, 3],
   );
   assert.equal(response.headers.get("Cache-Control"), "no-store");
+  const payload = await response.json();
+  assert.match(payload.case_id, /^sg_case_[0-9a-f]{32}$/);
+  assert.match(payload.version_id, /^sg_ver_[0-9a-f]{32}$/);
+  assert.equal(payload.case_status, "open");
+  assert.equal(payload.chain_head, "c".repeat(64));
+  const ingest = defaultCaseStore.calls.at(-1);
+  assert.equal(ingest.path, "/ingest");
+  assert.equal(ingest.payload.analysis.request_id, "sg_req_test");
+  assert.match(ingest.payload.actor_id, /^sg_actor_[0-9a-f]{32}$/);
+  assert.equal(ingest.payload.actor_id.includes("test"), false);
+});
+
+
+test("case reads use persistent storage and never call Modal", async () => {
+  let upstreamCalled = false;
+  const response = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/cases", {
+      headers: {
+        Origin: env.ALLOWED_ORIGIN,
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.55",
+      },
+    }),
+    env,
+    async () => {
+      upstreamCalled = true;
+      return new Response("unexpected");
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(upstreamCalled, false);
+  const payload = await response.json();
+  assert.equal(payload.cases.length, 1);
+  assert.equal(defaultCaseStore.calls.at(-1).path, "/cases");
+});
+
+
+test("case namespace follows authenticated subject instead of public IP", async () => {
+  const store = persistentCaseStore();
+  const first = new Request("https://api.shareguard.systems/v1/cases", {
+    headers: {
+      Authorization: AUTHORIZATION,
+      "CF-Connecting-IP": "203.0.113.60",
+    },
+  });
+  const second = new Request("https://api.shareguard.systems/v1/cases", {
+    headers: {
+      Authorization: AUTHORIZATION,
+      "CF-Connecting-IP": "198.51.100.60",
+    },
+  });
+
+  await handleRequest(first, { ...env, CASE_STORE: store.binding });
+  await handleRequest(second, { ...env, CASE_STORE: store.binding });
+
+  assert.equal(store.keys.length, 2);
+  assert.equal(store.keys[0], store.keys[1]);
+  assert.match(store.keys[0], /^sg_actor_[0-9a-f]{32}$/);
+});
+
+
+test("case commands ignore a client-supplied actor identity", async () => {
+  const store = persistentCaseStore();
+  const caseId = `sg_case_${"a".repeat(32)}`;
+  const response = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${caseId}/decision`, {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.61",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        actor_id: `sg_actor_${"f".repeat(32)}`,
+        action: "hold",
+        reason_code: "source_unverified",
+      }),
+    }),
+    { ...env, CASE_STORE: store.binding },
+  );
+
+  assert.equal(response.status, 200);
+  const command = store.calls.at(-1);
+  assert.equal(command.path, `/cases/${caseId}/decision`);
+  assert.notEqual(command.payload.actor_id, `sg_actor_${"f".repeat(32)}`);
+  assert.match(command.payload.actor_id, /^sg_actor_[0-9a-f]{32}$/);
 });
 
 

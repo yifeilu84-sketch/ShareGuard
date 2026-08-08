@@ -16,6 +16,14 @@ EDGE_DAILY_QUOTA = "50"
 name = "RATE_LIMITER"
 class_name = "ShareGuardRateLimiter"
 
+[[durable_objects.bindings]]
+name = "CASE_STORE"
+class_name = "ShareGuardCaseStore"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ShareGuardRateLimiter"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ShareGuardCaseStore"]

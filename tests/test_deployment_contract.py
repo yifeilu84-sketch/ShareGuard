@@ -224,6 +224,8 @@ class DeploymentContractTests(unittest.TestCase):
             "X-ShareGuard-Edge-Signature",
             "crypto.subtle",
             "RATE_LIMITER",
+            "CASE_STORE",
+            "ShareGuardCaseStore",
         ]:
             self.assertIn(marker, source)
         forbidden_host_suffix = ".".join(("modal", "run"))
@@ -241,6 +243,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('name = "RATE_LIMITER"', config)
         self.assertIn('class_name = "ShareGuardRateLimiter"', config)
         self.assertIn('new_sqlite_classes = ["ShareGuardRateLimiter"]', config)
+        self.assertIn('name = "CASE_STORE"', config)
+        self.assertIn('class_name = "ShareGuardCaseStore"', config)
+        self.assertIn('new_sqlite_classes = ["ShareGuardCaseStore"]', config)
         self.assertIn('EDGE_RATE_LIMIT_PER_MINUTE = "10"', config)
         self.assertIn('EDGE_DAILY_QUOTA = "50"', config)
         self.assertIn('name = "shareguard-api-gateway-preview"', preview_config)
@@ -248,6 +253,12 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', preview_config)
         self.assertIn('name = "RATE_LIMITER"', preview_config)
         self.assertIn('class_name = "ShareGuardRateLimiter"', preview_config)
+        self.assertIn('name = "CASE_STORE"', preview_config)
+        self.assertIn('class_name = "ShareGuardCaseStore"', preview_config)
+        self.assertIn(
+            'new_sqlite_classes = ["ShareGuardCaseStore"]',
+            preview_config,
+        )
         self.assertNotIn("api.shareguard.systems", preview_config)
         self.assertNotIn("MODAL_ORIGIN", preview_config)
         self.assertNotIn("EDGE_SHARED_SECRET", preview_config)
