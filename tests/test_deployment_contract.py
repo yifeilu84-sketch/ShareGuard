@@ -11,6 +11,50 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
+    def test_live_detector_disclosure_is_exact_and_separate_from_research_model(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        disclosure_path = ROOT / "docs" / "model-disclosure.md"
+        notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+
+        self.assertTrue(disclosure_path.is_file())
+        disclosure = disclosure_path.read_text(encoding="utf-8")
+        for marker in [
+            "SPAI",
+            "b1b1422f2912594ba2620b311dde5d28a230d04c",
+            "Apache License 2.0",
+            "ac5caaa6457172c53e36acdf665051ff292d2c3906b3911c51ed5db6844c2f87",
+            "ShareGuard Protected Screening Engine",
+            "not deployed",
+            "uncalibrated screening score",
+        ]:
+            self.assertIn(marker, disclosure)
+        self.assertIn("docs/model-disclosure.md", readme)
+        self.assertIn(
+            "private fusion model is not deployed",
+            re.sub(r"\s+", " ", readme),
+        )
+        self.assertNotIn("private fusion model runs", readme)
+        self.assertIn("not deployed", notices)
+        self.assertNotIn("private shadow model", notices)
+
+    def test_cloudflare_runbook_documents_signing_key_lifecycle(self):
+        runbook_path = ROOT / "deploy" / "cloudflare-worker" / "README.md"
+
+        self.assertTrue(runbook_path.is_file())
+        runbook = runbook_path.read_text(encoding="utf-8")
+        for marker in [
+            "SGD_SIGNING_PRIVATE_JWK",
+            "wrangler secret put SGD_SIGNING_PRIVATE_JWK",
+            "runtime-config.js",
+            "rotation",
+            "revocation",
+            "rollback",
+            "git diff --cached",
+        ]:
+            self.assertIn(marker, runbook)
+        self.assertNotRegex(runbook, r'"d"\s*:\s*"[A-Za-z0-9_-]{20,}"')
+        self.assertNotIn("BEGIN PRIVATE KEY", runbook)
+
     def test_parser_uses_environment_defaults_and_cli_overrides(self):
         parser = build_parser({
             "PORT": "9000",
@@ -144,7 +188,7 @@ class DeploymentContractTests(unittest.TestCase):
     def test_dockerignore_excludes_private_artifacts_and_secrets(self):
         text = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
-        for pattern in ["model_artifacts", "*.tar.gz", ".env", "*.pem"]:
+        for pattern in ["model_artifacts", "*.tar.gz", ".env", "*.pem", "*.jwk"]:
             self.assertIn(pattern, text)
 
     def test_pilot_environment_example_contains_names_not_secrets(self):

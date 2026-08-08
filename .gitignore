@@ -85,6 +85,7 @@ secrets/
 credentials*/
 *.key
 *.pem
+*.jwk
 .playwright-cli/
 platform_stdout.log
 platform_stderr.log

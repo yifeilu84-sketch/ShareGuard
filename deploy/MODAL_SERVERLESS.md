@@ -2,16 +2,16 @@
 
 本手册把 ShareGuard 在线筛查服务部署到 Modal T4，并由 Cloudflare Worker
 在 `https://api.shareguard.systems` 提供稳定入口。在线结论由固定版本的公开
-SPAI 引擎生成；ShareGuard 私有融合模型仅按 25% 比例执行影子评估，不改变
-用户结论，也不返回私有模型分数。GitHub 只保存代码和部署契约；模型归档、
+SPAI 引擎生成；ShareGuard 私有融合模型当前未部署，影子评估已禁用。GitHub
+只保存代码和部署契约；模型归档、
 Modal Token、HTTP Basic 凭据和实际 Modal URL 均不得提交。
 
 ## 0. 上线边界
 
 - 保留现有 Named Tunnel，直到 Modal 直连和 Worker 预览均完成真实图片推理。
 - 模型只上传到私有 Modal Volume，不进入 Git、GitHub Release 或容器镜像。
-- 前端必须显示实际 `detector_engine`，不得把 SPAI 结果表述为 ShareGuard 私有模型结果。
-- 影子评估只返回执行状态与是否一致，私有分数、阈值、权重路径和中间特征不出容器。
+- 产品界面使用 `ShareGuard Protected Screening Engine` 作为受保护服务身份；正式披露文件必须记录实际上游引擎，不得把 SPAI 权重表述为 ShareGuard 私有模型。
+- 当前 `SHAREGUARD_SHADOW_SAMPLE_RATE=0`；私有模型归档、分数、阈值、权重路径和中间特征均不进入在线容器。
 - 当前模型不提供定位输出时，前端不得生成固定 A1/A2 框或伪造传播溯源。
 - Worker 不读取上传内容，不缓存响应，只流式转发两个公开 API 路径。
 - `api.shareguard.systems` 切换前记录现有 Tunnel、DNS 和启动方式。
@@ -156,8 +156,8 @@ Get-Content deploy/modal/.env | Where-Object {
 
 只有命令输出 `ready_latency_ms`、`inference_latency_ms`、`model_version` 和
 `decision` 四个字段且退出码为 0，才进入下一步。分析响应还必须满足
-`detector_engine=spai-public-v1`、`decision_layer=shareguard-dossier-v1`；影子评估
-即使失败也不得改变主结果。
+内部诊断必须确认固定 SPAI 制品与 ShareGuard 决策层均已加载；公开响应仅返回
+中性受保护引擎身份，且 `shadow_evaluation.status=disabled`。
 
 ## 6. 部署 Worker 预览
 

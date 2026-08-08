@@ -16,5 +16,6 @@ non-executable provenance metadata. It is stored in a private deployment volume
 and is not committed to this repository.
 
 SPAI copyright notices and the Apache License remain with their respective
-authors. ShareGuard's workflow, policy, evidence packaging, and private shadow
-model are separate components.
+authors. ShareGuard's workflow, policy, evidence packaging, audit chain,
+signing service, and user interface are separate components. The ShareGuard
+private fusion model is not deployed in the current public service.

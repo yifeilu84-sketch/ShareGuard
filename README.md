@@ -15,14 +15,17 @@ ShareGuard is a comprehensive framework for robust AI-generated image detection 
 ## Live Deployment Disclosure
 
 The public website currently uses the pinned open-source **SPAI** checkpoint as
-its live image-level screening engine. ShareGuard's private fusion model runs
-only as a sampled, non-authoritative shadow evaluation and never changes the
-website decision or contributes a public score. The interface reports the
-actual detector identity and does not fabricate localization or provenance.
+its temporary live image-level screening component. The ShareGuard private
+fusion model is not deployed and no shadow inference is active. The product UI
+uses the neutral service identity **ShareGuard Protected Screening Engine**;
+this names the protected ShareGuard service and workflow, not ownership of the
+temporary detector weights. The interface does not fabricate localization or
+provenance.
 
 Research benchmark results for ShareGuard describe the private experimental
 model and are separate from individual results produced by the public website.
-See `THIRD_PARTY_NOTICES.md` for the pinned SPAI source and artifact digests.
+See `docs/model-disclosure.md` for the deployment boundary and
+`THIRD_PARTY_NOTICES.md` for the pinned SPAI source and artifact digests.
 
 ## Key Features
 

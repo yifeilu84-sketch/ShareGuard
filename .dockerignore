@@ -31,6 +31,7 @@ deploy/modal/.env
 deploy/modal/*.json
 *.key
 *.pem
+*.jwk
 
 *.pt
 *.pth
