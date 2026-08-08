@@ -9,9 +9,9 @@ entire deployment, not to an individual IP address or browser.
 ## Limits
 
 - Store at most 100 newly reserved media objects per UTC day across the site.
-- Count at most 8,000,000,000 plaintext media bytes in the rolling retention
-  window.
-- Keep each reservation for the configured seven-day media retention window.
+- Count at most 8,000,000,000 plaintext media bytes that have not been
+  explicitly confirmed deleted.
+- Keep each reservation in the quota ledger until confirmed deletion.
 - Continue enforcing the existing 8 MiB per-object upload limit.
 - Fail closed when the quota binding or its configuration is unavailable.
 
@@ -28,12 +28,15 @@ updated quota ledger.
 
 Before a private R2 write, the Worker sends the opaque version ID and plaintext
 byte size to the quota object. A successful reservation counts immediately and
-remains counted until one of two events occurs:
+remains counted until the Worker proves that the corresponding R2 object was
+deleted and releases the reservation.
 
-1. the Worker proves that the corresponding R2 object was deleted and releases
-   the reservation; or
-2. the configured retention deadline expires and the ledger purges it while the
-   matching R2 lifecycle rule removes the object.
+The lifecycle deadline does not automatically reduce the quota ledger. R2 may
+apply lifecycle deletion asynchronously, so an unconfirmed object remains
+counted even after its retention metadata expires. This can conservatively
+reduce available capacity, but it prevents delayed lifecycle processing from
+creating unmetered billable storage. A later reconciliation tool may release
+entries only after R2 confirms that their objects no longer exist.
 
 Reservations are idempotent by version ID. A repeated reservation must carry
 the same byte size. Known failures before or during R2 storage release the
@@ -57,8 +60,9 @@ useful warnings but are not treated as enforcement.
 
 ## Verification
 
-- Unit-test reservation idempotency, daily count rejection, byte rejection,
-  expiry, release, malformed requests, and concurrent transactional behavior.
+- Unit-test reservation idempotency, cumulative daily rejection, byte
+  rejection, conservative expiry handling, release, malformed requests, and
+  concurrent transactional behavior.
 - Integration-test fail-closed quota handling before R2 writes.
 - Integration-test quota release after confirmed cleanup and retention after
   ambiguous cleanup.

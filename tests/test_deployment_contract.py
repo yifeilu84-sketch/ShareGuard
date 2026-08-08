@@ -270,6 +270,8 @@ class DeploymentContractTests(unittest.TestCase):
             "RATE_LIMITER",
             "CASE_STORE",
             "ShareGuardCaseStore",
+            "STORAGE_QUOTA",
+            "ShareGuardStorageQuota",
         ]:
             self.assertIn(marker, source)
         forbidden_host_suffix = ".".join(("modal", "run"))
@@ -290,8 +292,13 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('name = "CASE_STORE"', config)
         self.assertIn('class_name = "ShareGuardCaseStore"', config)
         self.assertIn('new_sqlite_classes = ["ShareGuardCaseStore"]', config)
+        self.assertIn('name = "STORAGE_QUOTA"', config)
+        self.assertIn('class_name = "ShareGuardStorageQuota"', config)
+        self.assertIn('new_sqlite_classes = ["ShareGuardStorageQuota"]', config)
         self.assertIn('EDGE_RATE_LIMIT_PER_MINUTE = "10"', config)
         self.assertIn('EDGE_DAILY_QUOTA = "50"', config)
+        self.assertIn('MEDIA_GLOBAL_DAILY_OBJECTS = "100"', config)
+        self.assertIn('MEDIA_GLOBAL_ACTIVE_BYTES = "8000000000"', config)
         self.assertIn('SGD_SIGNING_KEY_ID = "sg-signing-2026-01"', config)
         self.assertIn('SGD_SIGNING_ISSUER = "https://shareguard.systems"', config)
         self.assertIn("SGD_SIGNING_PUBLIC_JWK", config)
@@ -303,10 +310,18 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('class_name = "ShareGuardRateLimiter"', preview_config)
         self.assertIn('name = "CASE_STORE"', preview_config)
         self.assertIn('class_name = "ShareGuardCaseStore"', preview_config)
+        self.assertIn('name = "STORAGE_QUOTA"', preview_config)
+        self.assertIn('class_name = "ShareGuardStorageQuota"', preview_config)
         self.assertIn(
             'new_sqlite_classes = ["ShareGuardCaseStore"]',
             preview_config,
         )
+        self.assertIn(
+            'new_sqlite_classes = ["ShareGuardStorageQuota"]',
+            preview_config,
+        )
+        self.assertIn('MEDIA_GLOBAL_DAILY_OBJECTS = "100"', preview_config)
+        self.assertIn('MEDIA_GLOBAL_ACTIVE_BYTES = "8000000000"', preview_config)
         self.assertNotIn("api.shareguard.systems", preview_config)
         self.assertNotIn("MODAL_ORIGIN", preview_config)
         self.assertNotIn("EDGE_SHARED_SECRET", preview_config)

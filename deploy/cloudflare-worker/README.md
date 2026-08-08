@@ -23,6 +23,27 @@ The following values are Cloudflare secrets and must never enter Git:
 The signing public key, key ID, issuer, rate limits, and allowed browser origin
 are non-secret deployment configuration.
 
+Private-media cost protection is enforced by the singleton `STORAGE_QUOTA`
+Durable Object. Production permits at most 100 new media reservations per UTC
+day and 8,000,000,000 active bytes across the seven-day retention window. A
+missing binding or invalid limit fails readiness and media ingestion closed.
+The quota is released only after an R2 deletion is confirmed; ambiguous cleanup
+remains counted until confirmed recovery or deletion. Retention expiry alone
+does not lower the ledger because R2 lifecycle processing is asynchronous.
+
+Create the bucket with Standard storage and install the matching seven-day
+expiration rule before deploying production:
+
+```powershell
+npx wrangler r2 bucket create shareguard-private-media --storage-class Standard
+npx wrangler r2 bucket lifecycle add shareguard-private-media shareguard-seven-day-expiry --expire-days 7
+npx wrangler r2 bucket lifecycle list shareguard-private-media
+```
+
+Do not add an Infrequent Access transition. The Worker ledger deliberately keeps
+20% headroom below the 10 GB Standard-storage free tier, and the daily object
+cap keeps write operations far below the included request allowance.
+
 ## Generate And Install A Signing Key
 
 Generate the private key outside the repository. This command refuses to

@@ -11,8 +11,9 @@ import {
   storePrivateMedia,
 } from "./media-store.js";
 import { issueReviewToken, verifyReviewToken } from "./review-access.js";
+import { ShareGuardStorageQuota } from "./storage-quota.js";
 
-export { ShareGuardCaseStore };
+export { ShareGuardCaseStore, ShareGuardStorageQuota };
 
 
 const STATIC_ROUTES = new Map([
@@ -144,6 +145,16 @@ function randomOpaqueId(prefix) {
 
 function mediaCustodyRequired(env) {
   return String(env.MEDIA_CUSTODY_REQUIRED || "").toLowerCase() === "true";
+}
+
+
+function storageQuotaReady(env) {
+  return Boolean(
+    env.STORAGE_QUOTA &&
+    positiveInteger(env.MEDIA_GLOBAL_DAILY_OBJECTS) &&
+    positiveInteger(env.MEDIA_GLOBAL_ACTIVE_BYTES) &&
+    positiveInteger(env.MEDIA_RETENTION_DAYS)
+  );
 }
 
 
@@ -711,6 +722,7 @@ async function sealCase(request, env, actorId, origin) {
         caseId: currentPayload.case.case_id,
         versionId: reservation.version_id,
       });
+      await releaseStorageQuota(env, reservation.version_id);
     } catch {
       return jsonResponse(
         503,
@@ -821,6 +833,7 @@ async function recoverCaseIngests(request, env, actorId, origin) {
         reserved: true,
         outcomeUnknown: true,
         mediaMayExist: true,
+        storageQuotaReserved: true,
       },
     );
     if (resolved.state === "pending") {
@@ -934,6 +947,7 @@ async function deleteCaseAndMedia(request, env, actorId, origin) {
           caseId: plan.case_id,
           versionId: version.version_id,
         });
+        await releaseStorageQuota(env, version.version_id);
       }
     }
   } catch {
@@ -1028,6 +1042,64 @@ function upstreamRequest(request, modalOrigin, edgeIdentity) {
 }
 
 
+async function reserveStorageQuota(env, reservationId, bytes) {
+  if (!env.STORAGE_QUOTA) {
+    throw new Error("storage quota binding unavailable");
+  }
+  const objectId = env.STORAGE_QUOTA.idFromName("global-media");
+  const response = await env.STORAGE_QUOTA.get(objectId).fetch(
+    "https://shareguard-storage-quota.internal/reserve",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reservation_id: reservationId, bytes }),
+    },
+  );
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error("invalid storage quota response");
+  }
+  if (response.status === 507 && payload.allowed === false) {
+    return {
+      allowed: false,
+      retryAfter: Math.max(1, Math.min(86_400, Number(payload.retry_after) || 60)),
+    };
+  }
+  if (!response.ok || payload.allowed !== true) {
+    throw new Error("storage quota service unavailable");
+  }
+  return { allowed: true, retryAfter: 0 };
+}
+
+
+async function releaseStorageQuota(env, reservationId) {
+  if (!env.STORAGE_QUOTA) {
+    throw new Error("storage quota binding unavailable");
+  }
+  const objectId = env.STORAGE_QUOTA.idFromName("global-media");
+  const response = await env.STORAGE_QUOTA.get(objectId).fetch(
+    "https://shareguard-storage-quota.internal/release",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reservation_id: reservationId }),
+    },
+  );
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error("invalid storage quota response");
+  }
+  if (!response.ok || typeof payload.released !== "boolean") {
+    throw new Error("storage quota service unavailable");
+  }
+  return payload;
+}
+
+
 function proxiedResponse(response, origin, env) {
   const headers = new Headers(response.headers);
   headers.set("Cache-Control", "no-store");
@@ -1110,6 +1182,14 @@ async function resolveFailedIngest(env, actorId, caseId, versionId, options = {}
     }
   }
 
+  if (options.storageQuotaReserved === true) {
+    try {
+      await releaseStorageQuota(env, versionId);
+    } catch {
+      return { state: "pending" };
+    }
+  }
+
   if (reserved) {
     const released = await settleIngestReservation(
       env,
@@ -1161,6 +1241,7 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
   let mediaCustody = null;
   let ingestReserved = false;
   let mediaWriteAttempted = false;
+  let storageQuotaReserved = false;
   if (privateMediaReady(env)) {
     if (requestedCaseId) {
       let reserved;
@@ -1208,6 +1289,63 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
     try {
       mediaWriteAttempted = true;
       const media = await uploadedMedia(mediaRequest, env, fileName);
+      let storageQuota;
+      try {
+        storageQuota = await reserveStorageQuota(env, versionId, media.bytes.length);
+      } catch {
+        if (ingestReserved) {
+          const resolved = await resolveFailedIngest(env, actorId, caseId, versionId, {
+            reserved: true,
+            outcomeUnknown: false,
+            mediaMayExist: false,
+            storageQuotaReserved: false,
+          });
+          if (resolved.state !== "cleaned") {
+            return jsonResponse(
+              503,
+              "case_store_unavailable",
+              "Media ingest reservation could not be released.",
+              origin,
+              env,
+            );
+          }
+        }
+        return jsonResponse(
+          503,
+          "storage_quota_unavailable",
+          "Private media storage quota is temporarily unavailable.",
+          origin,
+          env,
+        );
+      }
+      if (!storageQuota.allowed) {
+        if (ingestReserved) {
+          const resolved = await resolveFailedIngest(env, actorId, caseId, versionId, {
+            reserved: true,
+            outcomeUnknown: false,
+            mediaMayExist: false,
+            storageQuotaReserved: false,
+          });
+          if (resolved.state !== "cleaned") {
+            return jsonResponse(
+              503,
+              "case_store_unavailable",
+              "Media ingest reservation could not be released.",
+              origin,
+              env,
+            );
+          }
+        }
+        return jsonResponse(
+          507,
+          "storage_quota_exceeded",
+          "Private media storage quota has been reached.",
+          origin,
+          env,
+          { "Retry-After": String(storageQuota.retryAfter) },
+        );
+      }
+      storageQuotaReserved = true;
       mediaCustody = await storePrivateMedia(env, {
         actorId,
         caseId,
@@ -1222,6 +1360,7 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
         reserved: ingestReserved,
         outcomeUnknown: false,
         mediaMayExist: mediaWriteAttempted,
+        storageQuotaReserved,
       });
       return jsonResponse(
         503,
@@ -1264,6 +1403,7 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
       reserved: ingestReserved,
       outcomeUnknown: true,
       mediaMayExist: Boolean(mediaCustody) || mediaWriteAttempted,
+      storageQuotaReserved,
     });
     if (resolved.state === "committed") {
       storedPayload = { case: resolved.case };
@@ -1282,6 +1422,7 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
       reserved: ingestReserved,
       outcomeUnknown: false,
       mediaMayExist: Boolean(mediaCustody) || mediaWriteAttempted,
+      storageQuotaReserved,
     });
     if (resolved.state === "committed") {
       storedPayload = { case: resolved.case };
@@ -1354,6 +1495,7 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
       status: "ok",
       gateway: "ready",
       case_store: env.CASE_STORE ? "ready" : "unavailable",
+      storage_quota: storageQuotaReady(env) ? "ready" : "unavailable",
       private_media: privateMediaReady(env) ? "ready" : "unavailable",
       private_media_required: mediaCustodyRequired(env),
       inference: "check_v1_ready",
@@ -1396,6 +1538,20 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
         return await deleteCaseAndMedia(request, env, actorId, origin);
       }
       return await proxyCaseStore(request, env, actorId, origin);
+    }
+
+    if (
+      mediaCustodyRequired(env) &&
+      !storageQuotaReady(env) &&
+      new Set(["ready", "analyze"]).has(route.kind)
+    ) {
+      return jsonResponse(
+        503,
+        "storage_quota_unavailable",
+        "Private media storage quota is temporarily unavailable.",
+        origin,
+        env,
+      );
     }
 
     const modalOrigin = parseModalOrigin(env.MODAL_ORIGIN);

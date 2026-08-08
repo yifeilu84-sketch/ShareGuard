@@ -30,6 +30,35 @@ function allowAllLimiter() {
 }
 
 
+function allowAllStorageQuota() {
+  const calls = [];
+  return {
+    calls,
+    binding: {
+      idFromName(key) {
+        assert.equal(key, "global-media");
+        return key;
+      },
+      get: () => ({
+        async fetch(input, init) {
+          const request = input instanceof Request ? input : new Request(input, init);
+          const path = new URL(request.url).pathname;
+          const payload = await request.json();
+          calls.push({ path, payload });
+          if (path === "/reserve") {
+            return new Response(JSON.stringify({ allowed: true }), { status: 200 });
+          }
+          if (path === "/release") {
+            return new Response(JSON.stringify({ released: true }), { status: 200 });
+          }
+          return new Response("Not found", { status: 404 });
+        },
+      }),
+    },
+  };
+}
+
+
 function persistentCaseStore() {
   const keys = [];
   const calls = [];
@@ -417,6 +446,7 @@ function sealingCaseStore(record) {
 
 
 const defaultLimiter = allowAllLimiter();
+const defaultStorageQuota = allowAllStorageQuota();
 const defaultCaseStore = persistentCaseStore();
 const EDGE_SHARED_SECRET = "edge-secret-for-tests";
 const AUTHORIZATION = "Basic dGVzdDp0ZXN0";
@@ -428,7 +458,11 @@ const env = {
     .update(AUTHORIZATION)
     .digest("hex"),
   RATE_LIMITER: defaultLimiter.binding,
+  STORAGE_QUOTA: defaultStorageQuota.binding,
   CASE_STORE: defaultCaseStore.binding,
+  MEDIA_GLOBAL_DAILY_OBJECTS: "100",
+  MEDIA_GLOBAL_ACTIVE_BYTES: "8000000000",
+  MEDIA_RETENTION_DAYS: "7",
 };
 
 
@@ -522,10 +556,35 @@ test("health reports the control plane without waking Modal", async () => {
     status: "ok",
     gateway: "ready",
     case_store: "ready",
+    storage_quota: "ready",
     private_media: "unavailable",
     private_media_required: false,
     inference: "check_v1_ready",
   });
+});
+
+
+test("production readiness fails before inference when global storage quota is unavailable", async () => {
+  let upstreamCalled = false;
+  const response = await handleRequest(
+    allowedReadyRequest(),
+    {
+      ...env,
+      STORAGE_QUOTA: undefined,
+      MEDIA_CUSTODY_REQUIRED: "true",
+      MEDIA_GLOBAL_DAILY_OBJECTS: "100",
+      MEDIA_GLOBAL_ACTIVE_BYTES: "8000000000",
+      MEDIA_RETENTION_DAYS: "7",
+    },
+    async () => {
+      upstreamCalled = true;
+      return new Response(JSON.stringify({ status: "ready" }));
+    },
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, "storage_quota_unavailable");
+  assert.equal(upstreamCalled, false);
 });
 
 
@@ -824,6 +883,367 @@ test("production analysis stores encrypted media and serves it only through the 
 });
 
 
+test("global media quota rejects custody before any R2 write", async () => {
+  const bytes = new TextEncoder().encode("quota protected camera bytes");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/jpeg" }), "quota.jpg");
+  const bucket = memoryMediaBucket();
+  let reserveCalls = 0;
+  const storageQuota = {
+    idFromName(key) {
+      assert.equal(key, "global-media");
+      return key;
+    },
+    get: () => ({
+      async fetch(input, init) {
+        const request = input instanceof Request ? input : new Request(input, init);
+        assert.equal(new URL(request.url).pathname, "/reserve");
+        const payload = await request.json();
+        assert.equal(payload.bytes, bytes.length);
+        assert.match(payload.reservation_id, /^sg_ver_[0-9a-f]{32}$/);
+        reserveCalls += 1;
+        return new Response(JSON.stringify({
+          allowed: false,
+          retry_after: 3600,
+        }), {
+          status: 507,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    }),
+  };
+  const runtime = {
+    ...env,
+    STORAGE_QUOTA: storageQuota,
+    MEDIA_BUCKET: bucket,
+    MEDIA_CUSTODY_REQUIRED: "true",
+    MEDIA_ENCRYPTION_KEY_B64: Buffer.alloc(32, 9).toString("base64"),
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-test",
+    MEDIA_RETENTION_DAYS: "7",
+    MEDIA_GLOBAL_DAILY_OBJECTS: "100",
+    MEDIA_GLOBAL_ACTIVE_BYTES: "8000000000",
+  };
+
+  const response = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.92",
+        "X-File-Name": "quota.jpg",
+      },
+      body: form,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_quota",
+      media_sha256: digest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "review",
+      risk_level: "medium",
+      model_score: 0.6,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.2,
+      latency_ms: 300,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-QUOTA" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+
+  assert.equal(response.status, 507);
+  assert.equal(response.headers.get("Retry-After"), "3600");
+  assert.equal((await response.json()).error.code, "storage_quota_exceeded");
+  assert.equal(reserveCalls, 1);
+  assert.equal(bucket.objects.size, 0);
+});
+
+
+test("quota rejection releases an existing case ingest reservation", async () => {
+  const originalBytes = new TextEncoder().encode("existing case original");
+  const observedBytes = new TextEncoder().encode("existing case observed");
+  const bucket = memoryMediaBucket();
+  const store = mediaAwareCaseStore();
+  let quotaCalls = 0;
+  const storageQuota = {
+    idFromName: key => key,
+    get: () => ({
+      async fetch(input, init) {
+        const request = input instanceof Request ? input : new Request(input, init);
+        const path = new URL(request.url).pathname;
+        if (path === "/release") {
+          return new Response(JSON.stringify({ released: true }), { status: 200 });
+        }
+        quotaCalls += 1;
+        return quotaCalls === 1
+          ? new Response(JSON.stringify({ allowed: true }), { status: 200 })
+          : new Response(JSON.stringify({ allowed: false, retry_after: 600 }), { status: 507 });
+      },
+    }),
+  };
+  const runtime = {
+    ...env,
+    CASE_STORE: store.binding,
+    STORAGE_QUOTA: storageQuota,
+    MEDIA_BUCKET: bucket,
+    MEDIA_CUSTODY_REQUIRED: "true",
+    MEDIA_ENCRYPTION_KEY_B64: Buffer.alloc(32, 9).toString("base64"),
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-test",
+    MEDIA_RETENTION_DAYS: "7",
+  };
+  const analysis = bytes => ({
+    request_id: `sg_req_${bytes.length}`,
+    media_sha256: createHash("sha256").update(bytes).digest("hex"),
+    engine_release: "shareguard-screening-2026.08",
+    detector_engine: "shareguard-protected-screening-engine",
+    decision_layer: "shareguard-editorial-policy-v2",
+    machine_recommendation: "review",
+    decision_label: "review",
+    risk_level: "medium",
+    model_score: 0.6,
+    score_kind: "uncalibrated_ai_generation_score",
+    decision_margin: 0.2,
+    latency_ms: 300,
+    image: { width: 10, height: 10, format: "JPEG" },
+    report: { report_id: `SG-${bytes.length}` },
+  });
+  const originalForm = new FormData();
+  originalForm.append("image", new Blob([originalBytes], { type: "image/jpeg" }), "original.jpg");
+  const originalResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.96",
+        "X-File-Name": "original.jpg",
+      },
+      body: originalForm,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify(analysis(originalBytes))),
+  );
+  assert.equal(originalResponse.status, 200);
+  const original = await originalResponse.json();
+
+  const observedForm = new FormData();
+  observedForm.append("image", new Blob([observedBytes], { type: "image/jpeg" }), "observed.jpg");
+  const observedResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.96",
+        "X-File-Name": "observed.jpg",
+        "X-ShareGuard-Case-Id": original.case_id,
+        "X-ShareGuard-Version-Role": "observed_variant",
+      },
+      body: observedForm,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify(analysis(observedBytes))),
+  );
+
+  assert.equal(observedResponse.status, 507);
+  assert.equal(store.reservationCount, 0);
+  assert.equal(bucket.objects.size, 1);
+});
+
+
+test("required media custody fails closed when the global storage quota is missing", async () => {
+  const bytes = new TextEncoder().encode("unmetered camera bytes");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/jpeg" }), "unmetered.jpg");
+  const bucket = memoryMediaBucket();
+  const runtime = {
+    ...env,
+    STORAGE_QUOTA: undefined,
+    MEDIA_BUCKET: bucket,
+    MEDIA_CUSTODY_REQUIRED: "true",
+    MEDIA_ENCRYPTION_KEY_B64: Buffer.alloc(32, 9).toString("base64"),
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-test",
+    MEDIA_RETENTION_DAYS: "7",
+    MEDIA_GLOBAL_DAILY_OBJECTS: "100",
+    MEDIA_GLOBAL_ACTIVE_BYTES: "8000000000",
+  };
+
+  const response = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.93",
+        "X-File-Name": "unmetered.jpg",
+      },
+      body: form,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_unmetered",
+      media_sha256: digest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "review",
+      risk_level: "medium",
+      model_score: 0.6,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.2,
+      latency_ms: 300,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-UNMETERED" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, "storage_quota_unavailable");
+  assert.equal(bucket.objects.size, 0);
+});
+
+
+test("a confirmed failed R2 write releases its global storage reservation", async () => {
+  const bytes = new TextEncoder().encode("failed R2 camera bytes");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/jpeg" }), "failed-r2.jpg");
+  const storageQuota = allowAllStorageQuota();
+  let deleteCalls = 0;
+  const bucket = {
+    async put() {
+      throw new Error("simulated R2 write failure");
+    },
+    async get() {
+      return null;
+    },
+    async delete() {
+      deleteCalls += 1;
+    },
+  };
+  const runtime = {
+    ...env,
+    STORAGE_QUOTA: storageQuota.binding,
+    MEDIA_BUCKET: bucket,
+    MEDIA_CUSTODY_REQUIRED: "true",
+    MEDIA_ENCRYPTION_KEY_B64: Buffer.alloc(32, 9).toString("base64"),
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-test",
+    MEDIA_RETENTION_DAYS: "7",
+  };
+
+  const response = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.94",
+        "X-File-Name": "failed-r2.jpg",
+      },
+      body: form,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_failed_r2",
+      media_sha256: digest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "review",
+      risk_level: "medium",
+      model_score: 0.6,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.2,
+      latency_ms: 300,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-FAILED-R2" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, "media_custody_unavailable");
+  assert.equal(deleteCalls, 1);
+  assert.deepEqual(storageQuota.calls.map(call => call.path), ["/reserve", "/release"]);
+  assert.equal(
+    storageQuota.calls[0].payload.reservation_id,
+    storageQuota.calls[1].payload.reservation_id,
+  );
+});
+
+
+test("deleting an unsealed case releases quota only after its R2 media is deleted", async () => {
+  const bytes = new TextEncoder().encode("deletable camera bytes");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/jpeg" }), "deletable.jpg");
+  const bucket = memoryMediaBucket();
+  const store = mediaAwareCaseStore();
+  const storageQuota = allowAllStorageQuota();
+  const runtime = {
+    ...env,
+    CASE_STORE: store.binding,
+    STORAGE_QUOTA: storageQuota.binding,
+    MEDIA_BUCKET: bucket,
+    MEDIA_CUSTODY_REQUIRED: "true",
+    MEDIA_ENCRYPTION_KEY_B64: Buffer.alloc(32, 9).toString("base64"),
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-test",
+    MEDIA_RETENTION_DAYS: "7",
+  };
+  const analyzedResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.95",
+        "X-File-Name": "deletable.jpg",
+      },
+      body: form,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_deletable",
+      media_sha256: digest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "review",
+      risk_level: "medium",
+      model_score: 0.6,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.2,
+      latency_ms: 300,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-DELETABLE" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+  assert.equal(analyzedResponse.status, 200);
+  const analyzed = await analyzedResponse.json();
+  assert.equal(bucket.objects.size, 1);
+
+  const deletedResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${analyzed.case_id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.95",
+      },
+    }),
+    runtime,
+  );
+
+  assert.equal(deletedResponse.status, 200);
+  assert.equal(bucket.objects.size, 0);
+  assert.deepEqual(storageQuota.calls.map(call => call.path), ["/reserve", "/release"]);
+  assert.equal(
+    storageQuota.calls[0].payload.reservation_id,
+    storageQuota.calls[1].payload.reservation_id,
+  );
+});
+
+
 test("case-scoped reviewer links permit comments but not owner routes and revoke immediately", async () => {
   const ownerId = `sg_actor_${createHmac("sha256", EDGE_SHARED_SECRET)
     .update("shareguard-actor:test")
@@ -1071,10 +1491,12 @@ test("sealing cleans failed private-media ingests before committing the evidence
   const orphanKey = mediaObjectKey(ownerId, record.case_id, failedVersionId);
   await bucket.put(orphanKey, new TextEncoder().encode("failed encrypted ingest"));
   const store = realCaseStoreBinding(ownerId, record);
+  const storageQuota = allowAllStorageQuota();
   const runtime = {
     ...env,
     ...signing,
     CASE_STORE: store.binding,
+    STORAGE_QUOTA: storageQuota.binding,
     MEDIA_BUCKET: bucket,
   };
 
@@ -1094,6 +1516,7 @@ test("sealing cleans failed private-media ingests before committing the evidence
   assert.equal(failedResponse.status, 503);
   assert.equal((await failedResponse.json()).error.code, "media_cleanup_unavailable");
   assert.equal(bucket.objects.has(orphanKey), true);
+  assert.deepEqual(storageQuota.calls, []);
   bucket.setDeleteFailure(false);
 
   const response = await handleRequest(
@@ -1111,6 +1534,8 @@ test("sealing cleans failed private-media ingests before committing the evidence
 
   assert.equal(response.status, 200);
   assert.equal(bucket.objects.has(orphanKey), false);
+  assert.deepEqual(storageQuota.calls.map(call => call.path), ["/release"]);
+  assert.equal(storageQuota.calls[0].payload.reservation_id, failedVersionId);
   const evidencePackage = await response.json();
   assert.equal(
     (await verifyEvidencePackage(evidencePackage, [publicTrustRoot(runtime)])).valid,
@@ -1156,7 +1581,13 @@ test("an owner can recover an orphaned active ingest reservation without databas
   const orphanKey = mediaObjectKey(ownerId, record.case_id, orphanVersionId);
   await bucket.put(orphanKey, new TextEncoder().encode("ambiguous upload"));
   const store = realCaseStoreBinding(ownerId, record);
-  const runtime = { ...env, CASE_STORE: store.binding, MEDIA_BUCKET: bucket };
+  const storageQuota = allowAllStorageQuota();
+  const runtime = {
+    ...env,
+    CASE_STORE: store.binding,
+    STORAGE_QUOTA: storageQuota.binding,
+    MEDIA_BUCKET: bucket,
+  };
 
   const response = await handleRequest(
     new Request(`https://api.shareguard.systems/v1/cases/${record.case_id}/ingest-recovery`, {
@@ -1176,6 +1607,8 @@ test("an owner can recover an orphaned active ingest reservation without databas
   assert.equal(payload.recovered, 1);
   assert.deepEqual(payload.case.ingest_reservations, []);
   assert.equal(bucket.objects.has(orphanKey), false);
+  assert.deepEqual(storageQuota.calls.map(call => call.path), ["/release"]);
+  assert.equal(storageQuota.calls[0].payload.reservation_id, orphanVersionId);
 });
 
 
