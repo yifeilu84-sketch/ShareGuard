@@ -3,7 +3,7 @@ import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
 import { consumeQuotaState, handleRequest } from "../src/index.js";
-import { applyCaseCommand, createCase } from "../src/case-store.js";
+import { applyCaseCommand, createCase, ShareGuardCaseStore } from "../src/case-store.js";
 import { publicTrustRoot, verifyEvidencePackage } from "../src/evidence.js";
 
 
@@ -140,6 +140,47 @@ function memoryMediaBucket() {
     },
     async delete(key) {
       objects.delete(key);
+    },
+  };
+}
+
+
+function realCaseStoreBinding(ownerId, initialRecord) {
+  const values = new Map([[`case:${initialRecord.case_id}`, initialRecord]]);
+  const storage = {
+    async get(key) {
+      if (Array.isArray(key)) {
+        return new Map(key.filter(item => values.has(item)).map(item => [item, values.get(item)]));
+      }
+      return values.get(key);
+    },
+    async put(key, value) {
+      if (typeof key === "object" && value === undefined) {
+        for (const [itemKey, itemValue] of Object.entries(key)) values.set(itemKey, itemValue);
+      } else {
+        values.set(key, value);
+      }
+    },
+    async delete(key) {
+      return values.delete(key);
+    },
+    async list(options = {}) {
+      return new Map([...values].filter(([key]) => key.startsWith(options.prefix || "")));
+    },
+    async transaction(callback) {
+      return callback(storage);
+    },
+  };
+  const object = new ShareGuardCaseStore({ storage }, {});
+  return {
+    binding: {
+      idFromName(key) {
+        assert.equal(key, ownerId);
+        return key;
+      },
+      get() {
+        return { fetch: (input, init) => object.fetch(input instanceof Request ? input : new Request(input, init)) };
+      },
     },
   };
 }
@@ -407,6 +448,115 @@ test("production analysis stores encrypted media and serves it only through the 
   );
   assert.equal(deleteResponse.status, 200);
   assert.equal(bucket.objects.size, 0);
+});
+
+
+test("case-scoped reviewer links permit comments but not owner routes and revoke immediately", async () => {
+  const ownerId = `sg_actor_${createHmac("sha256", EDGE_SHARED_SECRET)
+    .update("shareguard-actor:test")
+    .digest("hex")
+    .slice(0, 32)}`;
+  const record = await createCase({
+    request_id: "sg_req_review",
+    media_sha256: "d".repeat(64),
+    engine_release: "shareguard-screening-2026.08",
+    detector_engine: "shareguard-protected-screening-engine",
+    decision_layer: "shareguard-editorial-policy-v2",
+    machine_recommendation: "review",
+    decision_label: "需要人工复核",
+    risk_level: "high",
+    model_score: 0.8,
+    score_kind: "uncalibrated_ai_generation_score",
+    decision_margin: 0.6,
+    latency_ms: 300,
+    image: { width: 10, height: 10, format: "JPEG" },
+    report: { report_id: "SG-REVIEW" },
+  }, {
+    caseId: `sg_case_${"7".repeat(32)}`,
+    versionId: `sg_ver_${"8".repeat(32)}`,
+    actorId: ownerId,
+  });
+  const store = realCaseStoreBinding(ownerId, record);
+  const runtime = {
+    ...env,
+    CASE_STORE: store.binding,
+    REVIEW_TOKEN_SECRET: "review-secret-with-at-least-thirty-two-bytes",
+  };
+  const issueResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${record.case_id}/review-grants`, {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.92",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ reviewer_name: "External counsel", expires_in_seconds: 3600 }),
+    }),
+    runtime,
+  );
+  assert.equal(issueResponse.status, 201);
+  const issued = await issueResponse.json();
+  assert.match(issued.review_url, /#review_token=/);
+  assert.equal(JSON.stringify(issued.case).includes(issued.token), false);
+
+  const reviewCaseResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/review/case", {
+      headers: { Authorization: `Bearer ${issued.token}`, Origin: env.ALLOWED_ORIGIN },
+    }),
+    runtime,
+  );
+  assert.equal(reviewCaseResponse.status, 200);
+  const reviewCase = await reviewCaseResponse.json();
+  assert.equal(reviewCase.case.case_id, record.case_id);
+  assert.equal(reviewCase.case.review_grants, undefined);
+  assert.equal(reviewCase.case.reviewer_context.role, "reviewer");
+
+  const commentResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/review/comments", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issued.token}`,
+        Origin: env.ALLOWED_ORIGIN,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body: "Independent review completed." }),
+    }),
+    runtime,
+  );
+  assert.equal(commentResponse.status, 200);
+  assert.equal((await commentResponse.json()).case.comments.length, 1);
+
+  const forbiddenOwnerRoute = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/cases", {
+      headers: { Authorization: `Bearer ${issued.token}`, "CF-Connecting-IP": "203.0.113.92" },
+    }),
+    runtime,
+  );
+  assert.equal(forbiddenOwnerRoute.status, 401);
+
+  const revokeResponse = await handleRequest(
+    new Request(
+      `https://api.shareguard.systems/v1/cases/${record.case_id}/review-grants/${issued.grant.grant_id}/revoke`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: AUTHORIZATION,
+          "CF-Connecting-IP": "203.0.113.92",
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      },
+    ),
+    runtime,
+  );
+  assert.equal(revokeResponse.status, 200);
+  const revokedResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/review/case", {
+      headers: { Authorization: `Bearer ${issued.token}`, Origin: env.ALLOWED_ORIGIN },
+    }),
+    runtime,
+  );
+  assert.equal(revokedResponse.status, 401);
 });
 
 

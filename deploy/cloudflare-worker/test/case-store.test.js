@@ -7,6 +7,7 @@ import {
   canonicalJson,
   createCase,
   migrateCaseRecord,
+  reviewGrantIsActive,
   sortCaseSummaries,
   verifyEventChain,
 } from "../src/case-store.js";
@@ -15,6 +16,8 @@ import {
 const CASE_ID = `sg_case_${"a".repeat(32)}`;
 const VERSION_ID = `sg_ver_${"b".repeat(32)}`;
 const ACTOR_ID = `sg_actor_${"c".repeat(32)}`;
+const REVIEWER_ID = `sg_actor_${"e".repeat(32)}`;
+const GRANT_ID = `sg_grant_${"f".repeat(32)}`;
 
 
 function analysis(overrides = {}) {
@@ -286,6 +289,63 @@ test("comments are attributed and appended to the evidence chain", async () => {
   assert.equal(commented.comments[0].body, "Please obtain the camera original.");
   assert.equal(commented.comments[0].actor_id, ACTOR_ID);
   assert.equal(commented.events.at(-1).event_type, "comment_added");
+});
+
+
+test("scoped review grants expire, revoke, and restrict reviewer commands", async () => {
+  const initial = await createCase(analysis(), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+  const granted = await applyCaseCommand(initial, {
+    type: "review_grant",
+    payload: {
+      grant_id: GRANT_ID,
+      reviewer_actor_id: REVIEWER_ID,
+      reviewer_name: "External counsel",
+      role: "reviewer",
+      issued_at: "2026-08-08T04:01:00.000Z",
+      expires_at: "2026-08-08T05:01:00.000Z",
+    },
+  }, { actorId: ACTOR_ID, now: "2026-08-08T04:01:00.000Z" });
+
+  assert.equal(granted.review_grants.length, 1);
+  assert.equal(reviewGrantIsActive(granted, {
+    grant_id: GRANT_ID,
+    reviewer_actor_id: REVIEWER_ID,
+    case_id: CASE_ID,
+  }, "2026-08-08T04:30:00.000Z"), true);
+  assert.equal(reviewGrantIsActive(granted, {
+    grant_id: GRANT_ID,
+    reviewer_actor_id: REVIEWER_ID,
+    case_id: CASE_ID,
+  }, "2026-08-08T05:01:01.000Z"), false);
+
+  const commented = await applyCaseCommand(granted, {
+    type: "comment",
+    payload: { body: "Independent review completed." },
+  }, { actorId: REVIEWER_ID, accessRole: "reviewer" });
+  assert.equal(commented.comments.at(-1).actor_id, REVIEWER_ID);
+  await assert.rejects(
+    applyCaseCommand(granted, {
+      type: "workflow",
+      payload: { priority: "low" },
+    }, { actorId: REVIEWER_ID, accessRole: "reviewer" }),
+    /permission/i,
+  );
+
+  const revoked = await applyCaseCommand(commented, {
+    type: "revoke_review_grant",
+    payload: { grant_id: GRANT_ID },
+  }, { actorId: ACTOR_ID, now: "2026-08-08T04:40:00.000Z" });
+  assert.equal(revoked.review_grants[0].revoked_at, "2026-08-08T04:40:00.000Z");
+  assert.equal(reviewGrantIsActive(revoked, {
+    grant_id: GRANT_ID,
+    reviewer_actor_id: REVIEWER_ID,
+    case_id: CASE_ID,
+  }, "2026-08-08T04:41:00.000Z"), false);
 });
 
 

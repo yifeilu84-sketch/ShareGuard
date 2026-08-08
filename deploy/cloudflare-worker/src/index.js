@@ -1,4 +1,4 @@
-import { ShareGuardCaseStore } from "./case-store.js";
+import { reviewGrantIsActive, ShareGuardCaseStore } from "./case-store.js";
 import {
   assertSigningReady,
   publicTrustRoot,
@@ -10,6 +10,7 @@ import {
   readPrivateMedia,
   storePrivateMedia,
 } from "./media-store.js";
+import { issueReviewToken, verifyReviewToken } from "./review-access.js";
 
 export { ShareGuardCaseStore };
 
@@ -24,6 +25,13 @@ const STATIC_ROUTES = new Map([
 ]);
 const CASE_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})(?:\/(decision|annotations|provenance|feedback|workflow|comments|seal))?$/;
 const CASE_MEDIA_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})\/versions\/(sg_ver_[0-9a-f]{32})\/media$/;
+const CASE_REVIEW_GRANT_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})\/review-grants(?:\/(sg_grant_[0-9a-f]{32})\/revoke)?$/;
+const REVIEW_MEDIA_ROUTE = /^\/v1\/review\/media\/(sg_ver_[0-9a-f]{32})$/;
+const REVIEW_ROUTES = new Map([
+  ["/v1/review/case", new Set(["GET"])],
+  ["/v1/review/comments", new Set(["POST"])],
+  ["/v1/review/annotations", new Set(["POST"])],
+]);
 
 const EDGE_CLIENT_ID_HEADER = "X-ShareGuard-Client-Id";
 const LEGACY_EDGE_SECRET_HEADER = "X-ShareGuard-Edge-Secret";
@@ -99,6 +107,17 @@ function routeFor(pathname) {
   }
   if (CASE_MEDIA_ROUTE.test(pathname)) {
     return { kind: "media", methods: new Set(["GET"]) };
+  }
+  const grantMatch = pathname.match(CASE_REVIEW_GRANT_ROUTE);
+  if (grantMatch) {
+    return { kind: "review_grant", methods: new Set(["POST"]) };
+  }
+  const reviewMethods = REVIEW_ROUTES.get(pathname);
+  if (reviewMethods) {
+    return { kind: "review", methods: reviewMethods };
+  }
+  if (REVIEW_MEDIA_ROUTE.test(pathname)) {
+    return { kind: "review", methods: new Set(["GET"]) };
   }
   const match = pathname.match(CASE_ROUTE);
   if (!match) {
@@ -403,27 +422,31 @@ async function authenticatedActorId(request, env) {
 }
 
 
-function caseStoreStub(env, actorId) {
+function caseStoreStub(env, namespaceId) {
   if (!env.CASE_STORE) {
     throw new Error("case store unavailable");
   }
-  const objectId = env.CASE_STORE.idFromName(actorId);
+  const objectId = env.CASE_STORE.idFromName(namespaceId);
   return env.CASE_STORE.get(objectId);
 }
 
 
 async function callCaseStore(
   env,
-  actorId,
+  namespaceId,
   path,
-  { method = "GET", payload = null } = {},
+  { method = "GET", payload = null, actorId = namespaceId, accessRole = "owner" } = {},
 ) {
   const init = { method };
   if (payload !== null) {
     init.headers = { "Content-Type": "application/json" };
-    init.body = JSON.stringify({ ...payload, actor_id: actorId });
+    init.body = JSON.stringify({
+      ...payload,
+      actor_id: actorId,
+      access_role: accessRole,
+    });
   }
-  return caseStoreStub(env, actorId).fetch(
+  return caseStoreStub(env, namespaceId).fetch(
     `https://shareguard-case-store.internal${path}`,
     init,
   );
@@ -471,6 +494,7 @@ async function proxyCaseStore(request, env, actorId, origin) {
       );
     }
     delete payload.actor_id;
+    delete payload.access_role;
   }
 
   const response = await callCaseStore(env, actorId, internalPath, {
@@ -487,6 +511,155 @@ async function proxyCaseStore(request, env, actorId, origin) {
     statusText: response.statusText,
     headers,
   });
+}
+
+
+function bearerToken(request) {
+  const header = String(request.headers.get("Authorization") || "");
+  const match = header.match(/^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/);
+  return match?.[1] || "";
+}
+
+
+function sanitizedReviewCase(record, claims) {
+  const output = structuredClone(record);
+  delete output.review_grants;
+  output.reviewer_context = {
+    role: "reviewer",
+    reviewer_name: claims.reviewer_name,
+    grant_id: claims.grant_id,
+    expires_at: new Date(claims.exp * 1000).toISOString(),
+  };
+  return output;
+}
+
+
+async function activeReviewContext(request, env) {
+  const token = bearerToken(request);
+  if (!token) throw new Error("review token is required");
+  const claims = await verifyReviewToken(env, token);
+  const stored = await callCaseStore(env, claims.owner_id, `/cases/${claims.case_id}`);
+  if (!stored.ok) throw new Error("review case is unavailable");
+  const payload = await stored.json();
+  if (!payload.case || !reviewGrantIsActive(payload.case, claims)) {
+    throw new Error("review grant is inactive");
+  }
+  return { claims, record: payload.case };
+}
+
+
+async function handleReviewRequest(request, env, origin) {
+  let context;
+  try {
+    context = await activeReviewContext(request, env);
+  } catch {
+    return jsonResponse(
+      401,
+      "review_access_denied",
+      "This review link is invalid, expired, or revoked.",
+      origin,
+      env,
+    );
+  }
+  const { claims, record } = context;
+  const pathname = new URL(request.url).pathname;
+  if (request.method === "GET" && pathname === "/v1/review/case") {
+    return jsonPayloadResponse({ case: sanitizedReviewCase(record, claims) }, 200, origin, env);
+  }
+  const mediaMatch = pathname.match(REVIEW_MEDIA_ROUTE);
+  if (request.method === "GET" && mediaMatch) {
+    const versionId = mediaMatch[1];
+    const version = record.versions?.find(item => item.version_id === versionId);
+    if (!version) {
+      return jsonResponse(404, "version_not_found", "Version not found.", origin, env);
+    }
+    try {
+      const media = await readPrivateMedia(env, {
+        actorId: claims.owner_id,
+        caseId: claims.case_id,
+        versionId,
+        custody: version.media_custody,
+      });
+      return new Response(media.bytes, {
+        headers: {
+          "Cache-Control": "private, no-store",
+          "Content-Type": media.contentType,
+          "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(media.fileName)}`,
+          "X-Content-Type-Options": "nosniff",
+          "X-ShareGuard-Media-SHA256": media.sha256,
+          ...corsHeaders(origin, env),
+        },
+      });
+    } catch {
+      return jsonResponse(409, "media_not_available", "Private media is unavailable.", origin, env);
+    }
+  }
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse(400, "invalid_json", "Request body must be valid JSON.", origin, env);
+  }
+  const command = pathname === "/v1/review/comments" ? "comments" : "annotations";
+  const stored = await callCaseStore(
+    env,
+    claims.owner_id,
+    `/cases/${claims.case_id}/${command}`,
+    {
+      method: "POST",
+      payload,
+      actorId: claims.reviewer_actor_id,
+      accessRole: "reviewer",
+    },
+  );
+  const result = await stored.json();
+  if (!stored.ok || !result.case) {
+    return jsonPayloadResponse(result, stored.status || 503, origin, env);
+  }
+  return jsonPayloadResponse({
+    case: sanitizedReviewCase(result.case, claims),
+  }, 200, origin, env);
+}
+
+
+async function manageReviewGrant(request, env, actorId, origin) {
+  const pathname = new URL(request.url).pathname;
+  const match = pathname.match(CASE_REVIEW_GRANT_ROUTE);
+  if (!match) return jsonResponse(404, "not_found", "Route not found.", origin, env);
+  const [, caseId, grantId] = match;
+  if (grantId) {
+    return proxyCaseStore(request, env, actorId, origin);
+  }
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse(400, "invalid_json", "Request body must be valid JSON.", origin, env);
+  }
+  const existing = await callCaseStore(env, actorId, `/cases/${caseId}`);
+  if (!existing.ok) {
+    return jsonPayloadResponse(await existing.json(), existing.status, origin, env);
+  }
+  const issued = await issueReviewToken(env, {
+    ownerId: actorId,
+    caseId,
+    reviewerName: payload.reviewer_name,
+    expiresInSeconds: payload.expires_in_seconds,
+  });
+  const stored = await callCaseStore(env, actorId, `/cases/${caseId}/review-grants`, {
+    method: "POST",
+    payload: issued.grant,
+  });
+  const result = await stored.json();
+  if (!stored.ok || !result.case) {
+    return jsonPayloadResponse(result, stored.status || 503, origin, env);
+  }
+  return jsonPayloadResponse({
+    grant: issued.grant,
+    token: issued.token,
+    review_url: `${env.ALLOWED_ORIGIN}/#review_token=${encodeURIComponent(issued.token)}`,
+    case: result.case,
+  }, 201, origin, env);
 }
 
 
@@ -835,6 +1008,10 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
     }, 200, origin, env);
   }
 
+  if (route.kind === "review") {
+    return handleReviewRequest(request, env, origin);
+  }
+
   try {
     if (!await edgeAuthorizationIsValid(request, env)) {
       return jsonResponse(
@@ -852,6 +1029,18 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
     }
     if (route.kind === "media") {
       return await servePrivateMedia(request, env, actorId, origin);
+    }
+    if (route.kind === "review_grant") {
+      return await manageReviewGrant(request, env, actorId, origin);
+    }
+    if (route.kind === "review_grant") {
+      return jsonResponse(
+        503,
+        "review_access_unavailable",
+        "Review access is temporarily unavailable.",
+        origin,
+        env,
+      );
     }
     if (route.kind === "media") {
       return jsonResponse(

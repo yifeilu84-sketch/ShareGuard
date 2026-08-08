@@ -1,6 +1,7 @@
 const CASE_ID_PATTERN = /^sg_case_[0-9a-f]{32}$/;
 const VERSION_ID_PATTERN = /^sg_ver_[0-9a-f]{32}$/;
 const ACTOR_ID_PATTERN = /^sg_actor_[0-9a-f]{32}$/;
+const GRANT_ID_PATTERN = /^sg_grant_[0-9a-f]{32}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ZERO_HASH = "0".repeat(64);
 const VERSION_ROLES = new Set([
@@ -207,6 +208,19 @@ export function migrateCaseRecord(record) {
     };
   }
   return next;
+}
+
+
+export function reviewGrantIsActive(record, claims, now = new Date().toISOString()) {
+  if (!record || record.case_id !== claims?.case_id) return false;
+  const grant = (record.review_grants || []).find(item => (
+    item.grant_id === claims.grant_id &&
+    item.reviewer_actor_id === claims.reviewer_actor_id &&
+    item.role === "reviewer"
+  ));
+  if (!grant || grant.revoked_at) return false;
+  const timestamp = Date.parse(now);
+  return Number.isFinite(timestamp) && Date.parse(grant.expires_at) > timestamp;
 }
 
 
@@ -621,6 +635,13 @@ export async function applyCaseCommand(record, command, context = {}) {
   }
   const type = String(command?.type || "");
   const payload = command?.payload || {};
+  const accessRole = String(context.accessRole || "owner");
+  if (accessRole === "reviewer" && !new Set(["annotations", "comment"]).has(type)) {
+    throw new CaseStoreError(403, "permission_denied", "Reviewer permission does not allow this command.");
+  }
+  if (!new Set(["owner", "reviewer"]).has(accessRole)) {
+    throw new CaseStoreError(403, "permission_denied", "Access role is invalid.");
+  }
   if (migrated.status === "sealed") {
     const activeKeyId = migrated.events?.at(-1)?.payload?.key_id;
     if (type === "seal" && payload.key_id === activeKeyId) {
@@ -821,6 +842,61 @@ export async function applyCaseCommand(record, command, context = {}) {
     };
     next.comments.push(comment);
     await appendEvent(next, "comment_added", comment, actorId, timestamp);
+    return next;
+  }
+
+  if (type === "review_grant") {
+    const grantId = requiredId(payload.grant_id, GRANT_ID_PATTERN, "grant_id");
+    if (next.review_grants.some(item => item.grant_id === grantId)) {
+      throw new CaseStoreError(409, "duplicate_grant", "Review grant already exists.");
+    }
+    const issuedAt = currentTimestamp(payload.issued_at || timestamp);
+    const expiresAt = currentTimestamp(payload.expires_at);
+    if (Date.parse(expiresAt) <= Date.parse(issuedAt)) {
+      throw new CaseStoreError(400, "invalid_field", "Review grant expiry is invalid.");
+    }
+    const grant = {
+      grant_id: grantId,
+      reviewer_actor_id: requiredId(
+        payload.reviewer_actor_id,
+        ACTOR_ID_PATTERN,
+        "reviewer_actor_id",
+      ),
+      reviewer_name: boundedText(
+        payload.reviewer_name,
+        "reviewer_name",
+        120,
+        { required: true },
+      ),
+      role: payload.role === "reviewer" ? "reviewer" : "",
+      issued_at: issuedAt,
+      expires_at: expiresAt,
+      issued_by: actorId,
+      revoked_at: null,
+      revoked_by: null,
+    };
+    if (!grant.role) {
+      throw new CaseStoreError(400, "invalid_field", "Review grant role is invalid.");
+    }
+    next.review_grants.push(grant);
+    await appendEvent(next, "review_grant_issued", grant, actorId, timestamp);
+    return next;
+  }
+
+  if (type === "revoke_review_grant") {
+    const grantId = requiredId(payload.grant_id, GRANT_ID_PATTERN, "grant_id");
+    const grant = next.review_grants.find(item => item.grant_id === grantId);
+    if (!grant) {
+      throw new CaseStoreError(404, "grant_not_found", "Review grant not found.");
+    }
+    if (!grant.revoked_at) {
+      grant.revoked_at = timestamp;
+      grant.revoked_by = actorId;
+      await appendEvent(next, "review_grant_revoked", {
+        grant_id: grantId,
+        revoked_at: timestamp,
+      }, actorId, timestamp);
+    }
     return next;
   }
 
@@ -1170,6 +1246,7 @@ export class ShareGuardCaseStore {
           feedback: "feedback",
           workflow: "workflow",
           comments: "comment",
+          "review-grants": "review_grant",
           seal: "seal",
         }[segments[2]];
         if (!commandType) {
@@ -1177,6 +1254,7 @@ export class ShareGuardCaseStore {
         }
         const payload = await readJson(request);
         const actorId = requiredId(payload.actor_id, ACTOR_ID_PATTERN, "actor_id");
+        const accessRole = payload.access_role === "reviewer" ? "reviewer" : "owner";
         const record = await this.state.storage.transaction(async transaction => {
           const existing = await transaction.get(key);
           if (!existing) {
@@ -1185,6 +1263,29 @@ export class ShareGuardCaseStore {
           const next = await applyCaseCommand(existing, {
             type: commandType,
             payload,
+          }, { actorId, accessRole });
+          await transaction.put(key, next);
+          return next;
+        });
+        return internalJson({ case: record });
+      }
+      if (
+        request.method === "POST" &&
+        segments.length === 5 &&
+        segments[2] === "review-grants" &&
+        segments[4] === "revoke"
+      ) {
+        const grantId = requiredId(segments[3], GRANT_ID_PATTERN, "grant_id");
+        const payload = await readJson(request);
+        const actorId = requiredId(payload.actor_id, ACTOR_ID_PATTERN, "actor_id");
+        const record = await this.state.storage.transaction(async transaction => {
+          const existing = await transaction.get(key);
+          if (!existing) {
+            throw new CaseStoreError(404, "case_not_found", "Case not found.");
+          }
+          const next = await applyCaseCommand(existing, {
+            type: "revoke_review_grant",
+            payload: { grant_id: grantId },
           }, { actorId });
           await transaction.put(key, next);
           return next;
