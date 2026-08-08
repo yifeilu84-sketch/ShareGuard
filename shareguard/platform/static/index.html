@@ -13,6 +13,7 @@
   <script src="i18n.js" defer></script>
   <script src="runtime-config.js" defer></script>
   <script src="api-client.js" defer></script>
+  <script src="sgd-container.js" defer></script>
   <script src="dossier.js" defer></script>
 </head>
 <body>
@@ -303,6 +304,14 @@
       <pre id="sealLog" aria-live="polite"></pre>
       <div id="sealResult" class="seal-result" hidden>
         <p data-i18n="seal.notice">证据包已由 ShareGuard 受保护签发服务签名，并绑定固定信任根。</p>
+        <label class="seal-encryption-option" for="encryptEvidencePackage">
+          <input id="encryptEvidencePackage" type="checkbox">
+          <span>使用本地口令加密交接包</span>
+        </label>
+        <label id="evidencePassphraseField" class="seal-passphrase-field" for="evidencePassphrase" hidden>
+          <span>交接口令（至少 12 个字符，不会上传）</span>
+          <input id="evidencePassphrase" type="password" minlength="12" maxlength="1024" autocomplete="new-password">
+        </label>
         <button id="downloadSgdButton" class="button inverse" type="button" data-i18n="seal.download">下载 .sgd 证据包</button>
         <a href="verifier.html" data-i18n="seal.verifier">打开独立验证器</a>
       </div>

@@ -686,7 +686,31 @@ async function sealCase(request, env, actorId, origin) {
   if (!stored.ok || !payload.case) {
     return jsonPayloadResponse(payload, stored.status || 503, origin, env);
   }
-  const evidencePackage = await signEvidence(payload.case, env);
+  const configuredMax = Number.parseInt(String(env.SGD_EMBED_MEDIA_MAX_BYTES || "8388608"), 10);
+  const embedMax = Number.isSafeInteger(configuredMax) && configuredMax > 0
+    ? configuredMax
+    : 8_388_608;
+  const mediaEntries = [];
+  for (const version of payload.case.versions || []) {
+    if (
+      version.media_custody?.status === "encrypted_private" &&
+      Number(version.media_custody.byte_size) <= embedMax
+    ) {
+      const media = await readPrivateMedia(env, {
+        actorId,
+        caseId: payload.case.case_id,
+        versionId: version.version_id,
+        custody: version.media_custody,
+      });
+      mediaEntries.push({
+        version_id: version.version_id,
+        bytes: media.bytes,
+        content_type: media.contentType,
+        file_name: media.fileName,
+      });
+    }
+  }
+  const evidencePackage = await signEvidence(payload.case, env, mediaEntries);
   return jsonPayloadResponse(evidencePackage, 200, origin, env, {
     "Content-Disposition": (
       `attachment; filename="${payload.case.case_id}.sgd"`

@@ -158,11 +158,11 @@ class ProductionFrontendContractTests(unittest.TestCase):
             self.assertNotIn(outdated_claim, script)
             self.assertNotIn(outdated_claim, translations)
 
-    def test_offline_verifier_trusts_only_pinned_v2_issuer_keys(self):
+    def test_offline_verifier_trusts_only_pinned_v3_issuer_keys(self):
         verifier = (STATIC / "verifier.js").read_text(encoding="utf-8")
         runtime = (STATIC / "runtime-config.js").read_text(encoding="utf-8")
 
-        self.assertIn("shareguard.sgd.v2", verifier)
+        self.assertIn("shareguard.sgd.v3", verifier)
         self.assertIn("ShareGuardRuntime.trustRoots", verifier)
         self.assertIn("verifyEventChain", verifier)
         self.assertIn("payload_sha256", verifier)
@@ -180,7 +180,11 @@ class ProductionFrontendContractTests(unittest.TestCase):
         self.assertIn('sealCase(caseId)', api_client)
         self.assertIn('this.postCaseCommand(caseId, "seal", {})', api_client)
         self.assertIn('apiClient.sealCase(caseId)', script)
-        self.assertIn('shareguard.sgd.v2', script)
+        self.assertIn('shareguard.sgd.v3', script)
+        container = (STATIC / "sgd-container.js").read_text(encoding="utf-8")
+        self.assertIn('CompressionStream("gzip")', container)
+        self.assertIn('AES-GCM', container)
+        self.assertIn('PBKDF2', container)
         self.assertNotIn('ShareGuard-Evidence-Package-1', script)
         self.assertNotIn('crypto.subtle.generateKey', script)
         self.assertNotIn('crypto.subtle.sign', script)

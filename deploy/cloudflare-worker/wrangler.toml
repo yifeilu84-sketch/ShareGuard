@@ -15,6 +15,7 @@ MEDIA_CUSTODY_REQUIRED = "true"
 MEDIA_MAX_BYTES = "8388608"
 MEDIA_RETENTION_DAYS = "7"
 MEDIA_ENCRYPTION_KEY_VERSION = "media-2026-01"
+SGD_EMBED_MEDIA_MAX_BYTES = "8388608"
 SGD_SIGNING_KEY_ID = "sg-signing-2026-01"
 SGD_SIGNING_ISSUER = "https://shareguard.systems"
 SGD_SIGNING_PUBLIC_JWK = '{"key_ops":["verify"],"ext":true,"kty":"EC","x":"YnqOieTlmC91Zd0SVXW3kJsEOlbw4Cx_dM2UwtaKc5E","y":"brPg1atNkAnWEIAO2WJvBaJKujfV-LirWa3O0RF9XnM","crv":"P-256"}'

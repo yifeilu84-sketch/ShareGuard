@@ -4,7 +4,7 @@ window.ShareGuardRuntime = Object.freeze({
   apiBaseUrl: "https://api.shareguard.systems",
   allowedPageOrigin: "https://shareguard.systems",
   credentialPersistence: "memory-only",
-  evidencePackageSchema: "shareguard.sgd.v2",
+  evidencePackageSchema: "shareguard.sgd.v3",
   trustRoots: Object.freeze([
     Object.freeze({
       schema: "shareguard.trust-root.v1",

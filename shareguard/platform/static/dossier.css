@@ -1823,7 +1823,8 @@ dialog::backdrop {
 }
 
 .seal-result {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   padding-top: 18px;
@@ -1838,6 +1839,30 @@ dialog::backdrop {
 
 .seal-result a {
   padding: 11px 0;
+}
+
+.seal-encryption-option,
+.seal-passphrase-field {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+  color: #E5E5E5;
+}
+
+.seal-passphrase-field {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(220px, auto) minmax(240px, 1fr);
+}
+
+.seal-passphrase-field input,
+#packagePassphrasePrompt input {
+  min-width: 0;
+  border: 1px solid currentColor;
+  padding: 9px 10px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
 }
 
 .release-dialog {
@@ -2048,6 +2073,18 @@ dialog::backdrop {
   padding: 8px 12px;
   place-items: center;
   cursor: pointer;
+}
+
+#packagePassphrasePrompt label {
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  padding: 0;
+  place-items: center stretch;
+  cursor: default;
+}
+
+#packagePassphrasePrompt button {
+  margin-top: 10px;
 }
 
 .verifier-main {
@@ -2718,7 +2755,12 @@ body.is-analyzing .engine-state .state-block {
 
   .seal-result {
     align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+
+  .seal-passphrase-field {
+    grid-column: auto;
+    grid-template-columns: 1fr;
   }
 
   .verifier-intake,

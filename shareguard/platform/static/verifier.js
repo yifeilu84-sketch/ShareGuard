@@ -1,12 +1,13 @@
 "use strict";
 
-const PACKAGE_SCHEMA = "shareguard.sgd.v2";
+const PACKAGE_SCHEMAS = new Set(["shareguard.sgd.v2", "shareguard.sgd.v3"]);
 const SIGNATURE_ALGORITHM = "ECDSA_P256_SHA256";
 const ZERO_HASH = "0".repeat(64);
 
 const verifier = {
   currentPackage: null,
   currentPackageName: "",
+  pendingFile: null,
   verifiedObjectUrl: null
 };
 
@@ -16,7 +17,8 @@ function initVerifier() {
     "verificationEmpty", "verificationDetail", "verificationCode", "verificationTitle",
     "verificationNarrative", "verifiedMedia", "verifiedImage", "verifiedFile",
     "verifiedDigest", "verifiedSignature", "verifiedAt", "verifiedScope",
-    "detachedMediaPrompt", "detachedMediaInput"
+    "detachedMediaPrompt", "detachedMediaInput", "packagePassphrasePrompt",
+    "packagePassphrase", "unlockPackageButton"
   ].forEach((id) => { verifier[id] = document.getElementById(id); });
 
   verifier.verifierInput.addEventListener("change", () => {
@@ -26,6 +28,12 @@ function initVerifier() {
   verifier.detachedMediaInput.addEventListener("change", () => {
     const [file] = verifier.detachedMediaInput.files || [];
     if (file) verifyDetachedMedia(file);
+  });
+  verifier.unlockPackageButton.addEventListener("click", () => {
+    if (verifier.pendingFile) verifyEvidenceFile(
+      verifier.pendingFile,
+      verifier.packagePassphrase.value
+    );
   });
   ["dragenter", "dragover"].forEach((eventName) => {
     verifier.verifierDrop.addEventListener(eventName, (event) => {
@@ -45,16 +53,19 @@ function initVerifier() {
   });
 }
 
-async function verifyEvidenceFile(file) {
+async function verifyEvidenceFile(file, passphrase = "") {
   setVerificationState("VERIFYING", "working");
   verifier.verificationEmpty.hidden = false;
   verifier.verificationEmpty.querySelector("span").textContent = "RECOMPUTING EVENT CHAIN, DIGEST AND SIGNATURE";
   verifier.verificationDetail.hidden = true;
+  verifier.packagePassphrasePrompt.hidden = true;
 
   try {
     if (!window.crypto?.subtle) throw new Error("WEB CRYPTO API UNAVAILABLE");
     if (file.size > 20 * 1024 * 1024) throw new Error("PACKAGE EXCEEDS 20 MB LIMIT");
-    const evidencePackage = JSON.parse(await file.text());
+    if (!window.ShareGuardSgd) throw new Error("SGD CONTAINER CODEC UNAVAILABLE");
+    const unpacked = await window.ShareGuardSgd.unpack(await file.arrayBuffer(), { passphrase });
+    const evidencePackage = unpacked.package;
     validatePackageShape(evidencePackage);
     const trustRoot = trustedRootFor(evidencePackage);
     if (!trustRoot) throw new Error("UNTRUSTED ISSUER OR SIGNING KEY");
@@ -64,6 +75,7 @@ async function verifyEvidenceFile(file) {
     if (evidencePackage.case.chain_head !== evidencePackage.case.events.at(-1)?.event_hash) {
       throw new Error("EVENT CHAIN HEAD MISMATCH");
     }
+    await verifyMediaManifest(evidencePackage);
 
     const canonical = stableStringify(signedPayload(evidencePackage));
     const encoded = new TextEncoder().encode(canonical);
@@ -88,21 +100,37 @@ async function verifyEvidenceFile(file) {
 
     verifier.currentPackage = evidencePackage;
     verifier.currentPackageName = file.name;
+    verifier.pendingFile = null;
+    verifier.packagePassphrase.value = "";
     renderVerifiedPackage(evidencePackage, file.name);
-    setVerificationState("PACKAGE VERIFIED / MEDIA FILE OPTIONAL", "valid_trusted");
+    const embeddedCount = evidencePackage.media_manifest?.filter(
+      (entry) => entry.inclusion === "embedded"
+    ).length || 0;
+    setVerificationState(
+      embeddedCount ? "PACKAGE AND EMBEDDED MEDIA VERIFIED" : "PACKAGE VERIFIED / MEDIA FILE OPTIONAL",
+      "valid_trusted"
+    );
   } catch (error) {
+    if (/passphrase|decrypt/i.test(String(error?.message || ""))) {
+      verifier.pendingFile = file;
+      verifier.packagePassphrasePrompt.hidden = false;
+      verifier.verificationEmpty.hidden = false;
+      verifier.verificationEmpty.querySelector("span").textContent = "ENCRYPTED PACKAGE / PASSPHRASE REQUIRED";
+      setVerificationState("PASSPHRASE REQUIRED", "working");
+      return;
+    }
     renderVerificationFailure(error);
   }
 }
 
 function validatePackageShape(evidencePackage) {
-  if (!evidencePackage || evidencePackage.schema !== PACKAGE_SCHEMA) {
+  if (!evidencePackage || !PACKAGE_SCHEMAS.has(evidencePackage.schema)) {
     throw new Error("UNSUPPORTED SHAREGUARD PACKAGE FORMAT");
   }
   if (
     evidencePackage.signature_algorithm !== SIGNATURE_ALGORITHM ||
     !evidencePackage.case ||
-    evidencePackage.case.schema !== "shareguard.case.v2" ||
+    !new Set(["shareguard.case.v2", "shareguard.case.v3"]).has(evidencePackage.case.schema) ||
     !Array.isArray(evidencePackage.case.events) ||
     !evidencePackage.case.events.length ||
     !/^[a-f0-9]{64}$/i.test(String(evidencePackage.payload_sha256 || "")) ||
@@ -122,7 +150,7 @@ function trustedRootFor(evidencePackage) {
 }
 
 function signedPayload(evidencePackage) {
-  return {
+  const payload = {
     schema: evidencePackage.schema,
     issuer: evidencePackage.issuer,
     key_id: evidencePackage.key_id,
@@ -130,6 +158,43 @@ function signedPayload(evidencePackage) {
     signature_algorithm: evidencePackage.signature_algorithm,
     case: evidencePackage.case
   };
+  if (evidencePackage.schema === "shareguard.sgd.v3") {
+    payload.media_manifest = evidencePackage.media_manifest;
+  }
+  return payload;
+}
+
+async function verifyMediaManifest(evidencePackage) {
+  if (evidencePackage.schema === "shareguard.sgd.v2") return;
+  if (!Array.isArray(evidencePackage.media_manifest)) {
+    throw new Error("SIGNED MEDIA MANIFEST MISSING");
+  }
+  const versions = new Map(
+    evidencePackage.case.versions.map((version) => [version.version_id, version])
+  );
+  if (evidencePackage.media_manifest.length !== versions.size) {
+    throw new Error("SIGNED MEDIA MANIFEST INCOMPLETE");
+  }
+  const seen = new Set();
+  for (const entry of evidencePackage.media_manifest) {
+    const version = versions.get(entry?.version_id);
+    if (
+      !version || seen.has(entry.version_id) ||
+      entry.media_sha256 !== version.media_sha256 ||
+      !new Set(["embedded", "detached_digest_only"]).has(entry.inclusion)
+    ) {
+      throw new Error("SIGNED MEDIA MANIFEST INVALID");
+    }
+    seen.add(entry.version_id);
+    if (entry.inclusion === "embedded") {
+      const bytes = base64UrlToBytes(entry.content_base64url);
+      if (bytes.length !== entry.byte_size || bytes.length > 8 * 1024 * 1024) {
+        throw new Error("EMBEDDED MEDIA SIZE MISMATCH");
+      }
+      const digest = bufferToHex(await crypto.subtle.digest("SHA-256", bytes));
+      if (digest !== entry.media_sha256) throw new Error("EMBEDDED MEDIA SHA-256 MISMATCH");
+    }
+  }
 }
 
 async function verifyEventChain(events) {
@@ -175,11 +240,24 @@ function renderVerifiedPackage(evidencePackage, filename) {
   verifier.verifiedSignature.textContent = `ECDSA P-256 / TRUSTED / ${evidencePackage.key_id}`;
   verifier.verifiedAt.textContent = String(evidencePackage.signed_at || "UNKNOWN");
   verifier.verifiedScope.textContent = `${record.events.length} EVENTS / ${record.versions.length} MEDIA DIGESTS`;
-  verifier.verifiedFile.textContent = `${original?.file_name || filename} / DETACHED MEDIA`;
-  verifier.detachedMediaPrompt.hidden = !original?.media_sha256;
-  verifier.verifiedMedia.hidden = true;
-  verifier.verifiedImage.removeAttribute("src");
   revokeVerifiedObjectUrl();
+  const manifest = evidencePackage.media_manifest?.find(
+    (entry) => entry.version_id === original?.version_id
+  );
+  if (manifest?.inclusion === "embedded") {
+    const bytes = base64UrlToBytes(manifest.content_base64url);
+    const media = new Blob([bytes], { type: manifest.content_type || "application/octet-stream" });
+    verifier.verifiedObjectUrl = URL.createObjectURL(media);
+    verifier.verifiedImage.src = verifier.verifiedObjectUrl;
+    verifier.verifiedMedia.hidden = false;
+    verifier.verifiedFile.textContent = `${manifest.file_name || original.file_name} / EMBEDDED MEDIA VERIFIED`;
+    verifier.detachedMediaPrompt.hidden = true;
+  } else {
+    verifier.verifiedFile.textContent = `${original?.file_name || filename} / DETACHED MEDIA`;
+    verifier.detachedMediaPrompt.hidden = !original?.media_sha256;
+    verifier.verifiedMedia.hidden = true;
+    verifier.verifiedImage.removeAttribute("src");
+  }
 }
 
 async function verifyDetachedMedia(file) {
@@ -275,11 +353,15 @@ function bufferToHex(buffer) {
 }
 
 function base64UrlToArrayBuffer(value) {
+  return base64UrlToBytes(value).buffer;
+}
+
+function base64UrlToBytes(value) {
   const normalized = String(value).replaceAll("-", "+").replaceAll("_", "/");
   const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes.buffer;
+  return bytes;
 }
 
 document.addEventListener("DOMContentLoaded", initVerifier);

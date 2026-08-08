@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="dossier.css">
   <script src="runtime-config.js" defer></script>
   <script src="i18n.js" defer></script>
+  <script src="sgd-container.js" defer></script>
   <script src="verifier.js" defer></script>
 </head>
 <body class="verifier-body" data-i18n-title="verifier.pageTitle">
@@ -33,6 +34,11 @@
         <span data-i18n="verifier.local">文件不会上传</span>
       </label>
       <input id="verifierInput" class="visually-hidden" type="file" accept=".sgd,application/json,application/vnd.shareguard.dossier+json">
+      <div id="packagePassphrasePrompt" class="detached-media-prompt" hidden>
+        <p><strong>输入交接口令</strong><span>该口令仅在本机用于解密，不会上传。</span></p>
+        <label for="packagePassphrase"><span>交接口令</span><input id="packagePassphrase" type="password" minlength="12" maxlength="1024" autocomplete="new-password"></label>
+        <button id="unlockPackageButton" class="button secondary" type="button">解密并验证</button>
+      </div>
       <div id="detachedMediaPrompt" class="detached-media-prompt" hidden>
         <p><strong data-i18n="verifier.detachedTitle">选择签封时对应的原始媒体</strong><span data-i18n="verifier.detachedBody">大型媒体未内嵌在证据包中。文件只会在本机计算 SHA-256。</span></p>
         <label class="button secondary" for="detachedMediaInput" data-i18n="verifier.detachedTitle">选择签封时对应的原始媒体</label>
@@ -70,7 +76,7 @@
   </main>
 
   <footer class="verifier-footer">
-    <span>SHAREGUARD DOSSIER FORMAT / VERSION 2</span>
+    <span>SHAREGUARD DOSSIER FORMAT / VERSION 3</span>
     <span>LOCAL CRYPTOGRAPHIC VERIFICATION</span>
   </footer>
 </body>

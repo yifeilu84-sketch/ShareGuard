@@ -26,11 +26,11 @@ async function signingEnvironment(keyId = "sg-signing-2026-01") {
 }
 
 
-async function sealedCase(keyId = "sg-signing-2026-01") {
+async function sealedCase(keyId = "sg-signing-2026-01", mediaSha256 = "d".repeat(64)) {
   const actorId = `sg_actor_${"c".repeat(32)}`;
   const created = await createCase({
     request_id: "sg_req_test",
-    media_sha256: "d".repeat(64),
+    media_sha256: mediaSha256,
     engine_release: "shareguard-screening-2026.08",
     detector_engine: "shareguard-protected-screening-engine",
     decision_layer: "shareguard-editorial-policy-v2",
@@ -68,7 +68,7 @@ test("server evidence is signed by the configured ShareGuard trust root", async 
   const trustRoot = publicTrustRoot(env);
   const verification = await verifyEvidencePackage(evidencePackage, [trustRoot]);
 
-  assert.equal(evidencePackage.schema, "shareguard.sgd.v2");
+  assert.equal(evidencePackage.schema, "shareguard.sgd.v3");
   assert.equal(evidencePackage.issuer, "https://shareguard.systems");
   assert.equal(evidencePackage.key_id, "sg-signing-2026-01");
   assert.equal(evidencePackage.signed_at, record.sealed_at);
@@ -76,6 +76,8 @@ test("server evidence is signed by the configured ShareGuard trust root", async 
   assert.match(evidencePackage.payload_sha256, /^[0-9a-f]{64}$/);
   assert.match(evidencePackage.signature, /^[A-Za-z0-9_-]+$/);
   assert.equal("public_key" in evidencePackage, false);
+  assert.equal(evidencePackage.media_manifest.length, 1);
+  assert.equal(evidencePackage.media_manifest[0].inclusion, "detached_digest_only");
   assert.deepEqual(verification, {
     valid: true,
     trusted: true,
@@ -83,6 +85,36 @@ test("server evidence is signed by the configured ShareGuard trust root", async 
     key_id: "sg-signing-2026-01",
     issuer: "https://shareguard.systems",
   });
+});
+
+
+test("v3 evidence embeds eligible media and detects byte tampering", async () => {
+  const env = await signingEnvironment();
+  const bytes = new TextEncoder().encode("original camera evidence");
+  const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+    .map(byte => byte.toString(16).padStart(2, "0"))
+    .join("");
+  const record = await sealedCase("sg-signing-2026-01", digest);
+  const version = record.versions[0];
+  const evidencePackage = await signEvidence(record, env, [{
+    version_id: version.version_id,
+    bytes,
+    content_type: "image/jpeg",
+    file_name: "camera.jpg",
+  }]);
+
+  assert.equal(evidencePackage.media_manifest[0].inclusion, "embedded");
+  assert.equal(evidencePackage.media_manifest[0].byte_size, bytes.length);
+  assert.equal(
+    (await verifyEvidencePackage(evidencePackage, [publicTrustRoot(env)])).valid,
+    true,
+  );
+
+  const encoded = evidencePackage.media_manifest[0].content_base64url;
+  evidencePackage.media_manifest[0].content_base64url = `${encoded.slice(0, -1)}${encoded.endsWith("a") ? "b" : "a"}`;
+  const tampered = await verifyEvidencePackage(evidencePackage, [publicTrustRoot(env)]);
+  assert.equal(tampered.valid, false);
+  assert.equal(tampered.reason, "embedded_media_digest_mismatch");
 });
 
 

@@ -45,6 +45,7 @@ const state = {
   waterfallRows: [],
   custodyEvents: [],
   evidencePackageBlob: null,
+  evidencePackage: null,
   evidencePackageName: ""
 };
 
@@ -82,6 +83,7 @@ function cacheDom() {
     "openReviewerButton", "reviewerImage", "reviewerTitle", "reviewerVerdict",
     "reviewerNarrative", "reviewForm", "reviewerComment", "reviewThread",
     "sealDialog", "sealTitle", "sealLog", "sealResult", "downloadSgdButton",
+    "encryptEvidencePackage", "evidencePassphraseField", "evidencePassphrase",
     "dropOverlay", "toast",
     "modelConnectionButton", "modelConnectionLabel", "modelConnectionDialog",
     "modelConnectionForm", "modelEndpoint", "modelUsername", "modelPassword",
@@ -1673,7 +1675,7 @@ function canonicalCaseExport() {
     event_count: record.events?.length || 0,
     chain_head: record.chain_head,
     trust: {
-      package_schema: "shareguard.sgd.v2",
+      package_schema: "shareguard.sgd.v3",
       signature_state: record.status === "sealed" ? "server_signed" : "not_sealed",
       media_storage: "detached_digest_only"
     }
@@ -1819,10 +1821,11 @@ function bindDialogControls() {
   dom.decisionForm.addEventListener("submit", submitHumanDecision);
   dom.feedbackForm.addEventListener("submit", submitOutcomeFeedback);
   dom.sealButton.addEventListener("click", runSealingRitual);
-  dom.downloadSgdButton.addEventListener("click", () => {
-    if (!state.evidencePackageBlob) return;
-    downloadBlob(state.evidencePackageBlob, state.evidencePackageName, "application/vnd.shareguard.dossier+json");
+  dom.encryptEvidencePackage.addEventListener("change", () => {
+    dom.evidencePassphraseField.hidden = !dom.encryptEvidencePackage.checked;
+    if (!dom.encryptEvidencePackage.checked) dom.evidencePassphrase.value = "";
   });
+  dom.downloadSgdButton.addEventListener("click", downloadEvidencePackage);
 }
 
 function bindModelConnectionControls() {
@@ -2002,7 +2005,7 @@ async function runSealingRitual() {
     "[04] COMPUTE CANONICAL PAYLOAD SHA-256",
     "[05] REQUEST PROTECTED ISSUER SIGNATURE",
     "[06] VERIFY PINNED ISSUER IDENTITY",
-    "[07] ASSEMBLE SHAREGUARD .SGD V2 PACKAGE"
+    "[07] ASSEMBLE SIGNED SHAREGUARD .SGD V3 PAYLOAD"
   ];
 
   try {
@@ -2013,10 +2016,8 @@ async function runSealingRitual() {
     await appendSealLog(`[OK] KEY ID ${evidencePackage.key_id}`);
     await appendSealLog(`[OK] DIGEST ${evidencePackage.payload_sha256.slice(0, 24).toUpperCase()}...`);
     await appendSealLog("[OK] SERVER SIGNATURE / PINNED TRUST ROOT");
-    state.evidencePackageBlob = new Blob(
-      [JSON.stringify(evidencePackage, null, 2)],
-      { type: "application/vnd.shareguard.dossier+json" }
-    );
+    state.evidencePackage = evidencePackage;
+    state.evidencePackageBlob = null;
     state.evidencePackageName = `${reportFileStem()}.sgd`;
     state.activeCaseRecord = evidencePackage.case;
     if (state.activePayload) state.activePayload.case = evidencePackage.case;
@@ -2033,6 +2034,35 @@ async function runSealingRitual() {
   }
 }
 
+async function downloadEvidencePackage() {
+  if (!state.evidencePackage || !window.ShareGuardSgd) return;
+  const encrypted = dom.encryptEvidencePackage.checked;
+  const passphrase = encrypted ? dom.evidencePassphrase.value : "";
+  if (encrypted && passphrase.length < 12) {
+    showToast("交接口令至少需要 12 个字符。");
+    dom.evidencePassphrase.focus();
+    return;
+  }
+  dom.downloadSgdButton.disabled = true;
+  try {
+    const bytes = await window.ShareGuardSgd.pack(state.evidencePackage, { passphrase });
+    state.evidencePackageBlob = new Blob(
+      [bytes],
+      { type: "application/vnd.shareguard.sgd" }
+    );
+    downloadBlob(
+      state.evidencePackageBlob,
+      state.evidencePackageName,
+      "application/vnd.shareguard.sgd"
+    );
+    showToast(encrypted ? "已下载本地口令加密证据包。" : "已下载签名压缩证据包。");
+  } catch (error) {
+    showToast(String(error?.message || "证据包封装失败。"));
+  } finally {
+    dom.downloadSgdButton.disabled = false;
+  }
+}
+
 async function appendSealLog(line) {
   dom.sealLog.textContent += `${line}\n`;
   dom.sealLog.scrollTop = dom.sealLog.scrollHeight;
@@ -2046,7 +2076,7 @@ async function requestServerEvidencePackage() {
   if (!state.activeCaseRecord?.human_decision) throw new Error("STRUCTURED HUMAN DECISION REQUIRED");
   const payload = await apiClient.sealCase(caseId);
   if (
-    payload?.schema !== "shareguard.sgd.v2"
+    payload?.schema !== "shareguard.sgd.v3"
     || !payload.payload_sha256
     || !payload.signature
     || !payload.key_id

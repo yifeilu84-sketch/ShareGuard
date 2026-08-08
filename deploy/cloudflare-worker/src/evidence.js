@@ -1,9 +1,12 @@
 import { canonicalJson, verifyEventChain } from "./case-store.js";
 
 
-const PACKAGE_SCHEMA = "shareguard.sgd.v2";
+const PACKAGE_SCHEMA = "shareguard.sgd.v3";
+const LEGACY_PACKAGE_SCHEMA = "shareguard.sgd.v2";
 const SIGNATURE_ALGORITHM = "ECDSA_P256_SHA256";
 const KEY_ID_PATTERN = /^[A-Za-z0-9._-]{3,128}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const MAX_EMBEDDED_MEDIA_BYTES = 8 * 1024 * 1024;
 
 
 function parseJwk(value, label, { privateKey = false } = {}) {
@@ -92,8 +95,19 @@ async function sha256Hex(value) {
 }
 
 
+async function sha256Bytes(bytes) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+  );
+  return [...new Uint8Array(digest)]
+    .map(byte => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+
 function signedPayload(evidencePackage) {
-  return {
+  const payload = {
     schema: evidencePackage.schema,
     issuer: evidencePackage.issuer,
     key_id: evidencePackage.key_id,
@@ -101,6 +115,64 @@ function signedPayload(evidencePackage) {
     signature_algorithm: evidencePackage.signature_algorithm,
     case: evidencePackage.case,
   };
+  if (evidencePackage.schema === PACKAGE_SCHEMA) {
+    payload.media_manifest = evidencePackage.media_manifest;
+  }
+  return payload;
+}
+
+
+function mediaEntryBytes(entry) {
+  const bytes = entry?.bytes;
+  if (bytes instanceof Uint8Array) return bytes;
+  if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
+  if (ArrayBuffer.isView(bytes)) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  throw new Error("Evidence media bytes are invalid.");
+}
+
+
+async function buildMediaManifest(caseRecord, mediaEntries) {
+  const supplied = new Map();
+  for (const entry of Array.isArray(mediaEntries) ? mediaEntries : []) {
+    const versionId = String(entry?.version_id || "");
+    if (!/^sg_ver_[0-9a-f]{32}$/.test(versionId) || supplied.has(versionId)) {
+      throw new Error("Evidence media version is invalid.");
+    }
+    supplied.set(versionId, entry);
+  }
+  return Promise.all((caseRecord.versions || []).map(async version => {
+    const entry = supplied.get(version.version_id);
+    const base = {
+      version_id: version.version_id,
+      media_sha256: version.media_sha256,
+      file_name: String(version.file_name || "media"),
+      content_type: String(version.media_custody?.content_type || ""),
+      byte_size: Number.isSafeInteger(version.media_custody?.byte_size)
+        ? version.media_custody.byte_size
+        : null,
+    };
+    if (!entry) {
+      return { ...base, inclusion: "detached_digest_only" };
+    }
+    const bytes = mediaEntryBytes(entry);
+    if (!bytes.length || bytes.length > MAX_EMBEDDED_MEDIA_BYTES) {
+      return { ...base, inclusion: "detached_digest_only" };
+    }
+    const digest = await sha256Bytes(bytes);
+    if (digest !== version.media_sha256) {
+      throw new Error("Evidence media digest does not match the case version.");
+    }
+    return {
+      ...base,
+      content_type: String(entry.content_type || base.content_type || "application/octet-stream"),
+      file_name: String(entry.file_name || base.file_name),
+      byte_size: bytes.length,
+      inclusion: "embedded",
+      content_base64url: base64UrlEncode(bytes),
+    };
+  }));
 }
 
 
@@ -158,7 +230,7 @@ export async function assertSigningReady(env) {
 }
 
 
-export async function signEvidence(caseRecord, env) {
+export async function signEvidence(caseRecord, env, mediaEntries = []) {
   const trustRoot = publicTrustRoot(env);
   const privateJwk = parseJwk(
     env.SGD_SIGNING_PRIVATE_JWK,
@@ -194,6 +266,7 @@ export async function signEvidence(caseRecord, env) {
     signed_at: caseRecord.sealed_at,
     signature_algorithm: SIGNATURE_ALGORITHM,
     case: structuredClone(caseRecord),
+    media_manifest: await buildMediaManifest(caseRecord, mediaEntries),
   };
   const canonical = canonicalJson(signedPayload(evidencePackage));
   const encoded = new TextEncoder().encode(canonical);
@@ -246,11 +319,11 @@ function verificationResult(evidencePackage, valid, trusted, reason) {
 export async function verifyEvidencePackage(evidencePackage, trustRoots) {
   if (
     !evidencePackage ||
-    evidencePackage.schema !== PACKAGE_SCHEMA ||
+    !new Set([PACKAGE_SCHEMA, LEGACY_PACKAGE_SCHEMA]).has(evidencePackage.schema) ||
     evidencePackage.signature_algorithm !== SIGNATURE_ALGORITHM ||
     !evidencePackage.case ||
     typeof evidencePackage.signature !== "string" ||
-    !/^[0-9a-f]{64}$/.test(String(evidencePackage.payload_sha256 || ""))
+    !SHA256_PATTERN.test(String(evidencePackage.payload_sha256 || ""))
   ) {
     return verificationResult(evidencePackage, false, false, "invalid_package_shape");
   }
@@ -267,6 +340,55 @@ export async function verifyEvidencePackage(evidencePackage, trustRoots) {
     evidencePackage.case.chain_head !== evidencePackage.case.events.at(-1)?.event_hash
   ) {
     return verificationResult(evidencePackage, false, true, "invalid_event_chain");
+  }
+
+  if (evidencePackage.schema === PACKAGE_SCHEMA) {
+    if (!Array.isArray(evidencePackage.media_manifest)) {
+      return verificationResult(evidencePackage, false, true, "invalid_media_manifest");
+    }
+    const versions = new Map((evidencePackage.case.versions || []).map(version => (
+      [version.version_id, version]
+    )));
+    if (evidencePackage.media_manifest.length !== versions.size) {
+      return verificationResult(evidencePackage, false, true, "invalid_media_manifest");
+    }
+    const seen = new Set();
+    for (const entry of evidencePackage.media_manifest) {
+      const version = versions.get(entry?.version_id);
+      if (
+        !version ||
+        seen.has(entry.version_id) ||
+        entry.media_sha256 !== version.media_sha256 ||
+        !new Set(["embedded", "detached_digest_only"]).has(entry.inclusion)
+      ) {
+        return verificationResult(evidencePackage, false, true, "invalid_media_manifest");
+      }
+      seen.add(entry.version_id);
+      if (entry.inclusion === "embedded") {
+        try {
+          const bytes = base64UrlDecode(entry.content_base64url);
+          if (
+            bytes.length !== entry.byte_size ||
+            bytes.length > MAX_EMBEDDED_MEDIA_BYTES ||
+            await sha256Bytes(bytes) !== entry.media_sha256
+          ) {
+            return verificationResult(
+              evidencePackage,
+              false,
+              true,
+              "embedded_media_digest_mismatch",
+            );
+          }
+        } catch {
+          return verificationResult(
+            evidencePackage,
+            false,
+            true,
+            "embedded_media_digest_mismatch",
+          );
+        }
+      }
+    }
   }
 
   const canonical = canonicalJson(signedPayload(evidencePackage));
