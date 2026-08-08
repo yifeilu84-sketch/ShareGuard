@@ -1,5 +1,9 @@
 "use strict";
 
+const PACKAGE_SCHEMA = "shareguard.sgd.v2";
+const SIGNATURE_ALGORITHM = "ECDSA_P256_SHA256";
+const ZERO_HASH = "0".repeat(64);
+
 const verifier = {
   currentPackage: null,
   currentPackageName: "",
@@ -23,7 +27,6 @@ function initVerifier() {
     const [file] = verifier.detachedMediaInput.files || [];
     if (file) verifyDetachedMedia(file);
   });
-
   ["dragenter", "dragover"].forEach((eventName) => {
     verifier.verifierDrop.addEventListener(eventName, (event) => {
       event.preventDefault();
@@ -45,26 +48,32 @@ function initVerifier() {
 async function verifyEvidenceFile(file) {
   setVerificationState("VERIFYING", "working");
   verifier.verificationEmpty.hidden = false;
-  verifier.verificationEmpty.querySelector("span").textContent = "RECOMPUTING SHA-256 AND SIGNATURE";
+  verifier.verificationEmpty.querySelector("span").textContent = "RECOMPUTING EVENT CHAIN, DIGEST AND SIGNATURE";
   verifier.verificationDetail.hidden = true;
 
   try {
     if (!window.crypto?.subtle) throw new Error("WEB CRYPTO API UNAVAILABLE");
-    if (file.size > 40 * 1024 * 1024) throw new Error("PACKAGE EXCEEDS 40 MB LIMIT");
+    if (file.size > 20 * 1024 * 1024) throw new Error("PACKAGE EXCEEDS 20 MB LIMIT");
     const evidencePackage = JSON.parse(await file.text());
     validatePackageShape(evidencePackage);
-
-    const canonical = stableStringify(evidencePackage.manifest);
-    const encoded = new TextEncoder().encode(canonical);
-    const digestBuffer = await crypto.subtle.digest("SHA-256", encoded);
-    const digest = bufferToHex(digestBuffer);
-    if (digest !== String(evidencePackage.digest).toLowerCase()) {
-      throw new Error("SHA-256 DIGEST MISMATCH");
+    const trustRoot = trustedRootFor(evidencePackage);
+    if (!trustRoot) throw new Error("UNTRUSTED ISSUER OR SIGNING KEY");
+    if (!await verifyEventChain(evidencePackage.case.events)) {
+      throw new Error("EVENT CHAIN INVALID");
+    }
+    if (evidencePackage.case.chain_head !== evidencePackage.case.events.at(-1)?.event_hash) {
+      throw new Error("EVENT CHAIN HEAD MISMATCH");
     }
 
+    const canonical = stableStringify(signedPayload(evidencePackage));
+    const encoded = new TextEncoder().encode(canonical);
+    const digest = bufferToHex(await crypto.subtle.digest("SHA-256", encoded));
+    if (digest !== String(evidencePackage.payload_sha256).toLowerCase()) {
+      throw new Error("SIGNED PAYLOAD SHA-256 MISMATCH");
+    }
     const publicKey = await crypto.subtle.importKey(
       "jwk",
-      evidencePackage.public_key,
+      trustRoot.public_jwk,
       { name: "ECDSA", namedCurve: "P-256" },
       false,
       ["verify"]
@@ -72,73 +81,111 @@ async function verifyEvidenceFile(file) {
     const validSignature = await crypto.subtle.verify(
       { name: "ECDSA", hash: "SHA-256" },
       publicKey,
-      base64ToArrayBuffer(evidencePackage.signature),
+      base64UrlToArrayBuffer(evidencePackage.signature),
       encoded
     );
     if (!validSignature) throw new Error("ECDSA SIGNATURE INVALID");
 
     verifier.currentPackage = evidencePackage;
     verifier.currentPackageName = file.name;
-    const mediaState = renderVerifiedPackage(evidencePackage, file.name);
-    if (mediaState === "detached") {
-      setVerificationState("PACKAGE VERIFIED / MEDIA FILE REQUIRED", "working");
-    } else {
-      setVerificationState("INTEGRITY VERIFIED", "valid");
-    }
+    renderVerifiedPackage(evidencePackage, file.name);
+    setVerificationState("PACKAGE VERIFIED / MEDIA FILE OPTIONAL", "valid_trusted");
   } catch (error) {
     renderVerificationFailure(error);
   }
 }
 
 function validatePackageShape(evidencePackage) {
-  if (!evidencePackage || evidencePackage.format !== "ShareGuard-Evidence-Package-1") {
+  if (!evidencePackage || evidencePackage.schema !== PACKAGE_SCHEMA) {
     throw new Error("UNSUPPORTED SHAREGUARD PACKAGE FORMAT");
   }
-  if (!evidencePackage.manifest || evidencePackage.manifest.format !== "ShareGuard-Dossier-1") {
-    throw new Error("DOSSIER MANIFEST MISSING");
-  }
-  if (!evidencePackage.digest || !evidencePackage.signature || !evidencePackage.public_key) {
+  if (
+    evidencePackage.signature_algorithm !== SIGNATURE_ALGORITHM ||
+    !evidencePackage.case ||
+    evidencePackage.case.schema !== "shareguard.case.v2" ||
+    !Array.isArray(evidencePackage.case.events) ||
+    !evidencePackage.case.events.length ||
+    !/^[a-f0-9]{64}$/i.test(String(evidencePackage.payload_sha256 || "")) ||
+    !/^[A-Za-z0-9_-]+$/.test(String(evidencePackage.signature || ""))
+  ) {
     throw new Error("CRYPTOGRAPHIC MATERIAL INCOMPLETE");
   }
 }
 
+function trustedRootFor(evidencePackage) {
+  const trustRoots = window.ShareGuardRuntime.trustRoots || [];
+  return trustRoots.find((root) => (
+    root.issuer === evidencePackage.issuer &&
+    root.key_id === evidencePackage.key_id &&
+    root.algorithm === SIGNATURE_ALGORITHM
+  ));
+}
+
+function signedPayload(evidencePackage) {
+  return {
+    schema: evidencePackage.schema,
+    issuer: evidencePackage.issuer,
+    key_id: evidencePackage.key_id,
+    signed_at: evidencePackage.signed_at,
+    signature_algorithm: evidencePackage.signature_algorithm,
+    case: evidencePackage.case
+  };
+}
+
+async function verifyEventChain(events) {
+  let previousHash = ZERO_HASH;
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    const core = {
+      sequence: event.sequence,
+      created_at: event.created_at,
+      actor_id: event.actor_id,
+      event_type: event.event_type,
+      payload: event.payload,
+      previous_hash: event.previous_hash
+    };
+    const eventHash = bufferToHex(
+      await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(stableStringify(core))
+      )
+    );
+    if (
+      event.sequence !== index + 1 ||
+      event.previous_hash !== previousHash ||
+      event.event_hash !== eventHash
+    ) return false;
+    previousHash = event.event_hash;
+  }
+  return true;
+}
+
 function renderVerifiedPackage(evidencePackage, filename) {
-  const manifest = evidencePackage.manifest;
+  const record = evidencePackage.case;
+  const original = record.versions.find((version) => version.role === "original") || record.versions[0];
+  const decision = record.human_decision;
   verifier.verificationEmpty.hidden = true;
   verifier.verificationDetail.hidden = false;
-  verifier.verificationCode.textContent = `CASE #${manifest.case?.id || "UNKNOWN"}`;
-  verifier.verificationTitle.textContent = String(manifest.decision?.label || "VERIFIED DOSSIER");
-  verifier.verificationNarrative.textContent = String(manifest.decision?.narrative || "No narrative recorded.");
-  verifier.verifiedDigest.textContent = evidencePackage.digest.toUpperCase();
-  verifier.verifiedSignature.textContent = "ECDSA P-256 / VALID";
-  verifier.verifiedAt.textContent = String(manifest.sealed_at || "UNKNOWN");
-  verifier.verifiedScope.textContent = String(manifest.signing_scope || "UNKNOWN").toUpperCase();
-  verifier.verifiedFile.textContent = `${manifest.media?.file_name || filename} / SEALED COPY`;
-  verifier.detachedMediaPrompt.hidden = true;
+  verifier.verificationCode.textContent = `CASE #${record.case_id || "UNKNOWN"}`;
+  verifier.verificationTitle.textContent = String(decision?.action || "SEALED DOSSIER").toUpperCase();
+  verifier.verificationNarrative.textContent = decision
+    ? `HUMAN DECISION / ${decision.reason_code}${decision.note ? ` / ${decision.note}` : ""}`
+    : "NO HUMAN DECISION RECORDED";
+  verifier.verifiedDigest.textContent = evidencePackage.payload_sha256.toUpperCase();
+  verifier.verifiedSignature.textContent = `ECDSA P-256 / TRUSTED / ${evidencePackage.key_id}`;
+  verifier.verifiedAt.textContent = String(evidencePackage.signed_at || "UNKNOWN");
+  verifier.verifiedScope.textContent = `${record.events.length} EVENTS / ${record.versions.length} MEDIA DIGESTS`;
+  verifier.verifiedFile.textContent = `${original?.file_name || filename} / DETACHED MEDIA`;
+  verifier.detachedMediaPrompt.hidden = !original?.media_sha256;
+  verifier.verifiedMedia.hidden = true;
+  verifier.verifiedImage.removeAttribute("src");
   revokeVerifiedObjectUrl();
-
-  const dataUrl = manifest.media?.data_url;
-  if (typeof dataUrl === "string" && /^data:image\/(png|jpeg|webp);base64,/i.test(dataUrl)) {
-    verifier.verifiedImage.src = dataUrl;
-    verifier.verifiedMedia.hidden = false;
-    return "embedded";
-  }
-  if (manifest.media?.embedded === false && /^[a-f0-9]{64}$/i.test(String(manifest.media?.sha256 || ""))) {
-    verifier.detachedMediaPrompt.hidden = false;
-    verifier.verificationNarrative.textContent = `${verifier.verificationNarrative.textContent} MEDIA FILE REQUIRED FOR DETACHED-EVIDENCE VERIFICATION.`;
-    verifier.verifiedMedia.hidden = true;
-    verifier.verifiedImage.removeAttribute("src");
-    return "detached";
-  } else {
-    verifier.verifiedMedia.hidden = true;
-    verifier.verifiedImage.removeAttribute("src");
-    return "legacy-no-media";
-  }
 }
 
 async function verifyDetachedMedia(file) {
   const evidencePackage = verifier.currentPackage;
-  const expectedDigest = String(evidencePackage?.manifest?.media?.sha256 || "").toLowerCase();
+  const original = evidencePackage?.case?.versions?.find((version) => version.role === "original") || evidencePackage?.case?.versions?.[0];
+  const expectedDigest = String(original?.media_sha256 || "").toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(expectedDigest)) {
     renderVerificationFailure(new Error("SIGNED MEDIA DIGEST MISSING"));
     return;
@@ -156,10 +203,7 @@ async function verifyDetachedMedia(file) {
       verifier.verifiedImage.src = verifier.verifiedObjectUrl;
       verifier.verifiedMedia.hidden = false;
     }
-    verifier.verificationNarrative.textContent = String(
-      evidencePackage.manifest.decision?.narrative || "Signed dossier and detached media are verified."
-    );
-    setVerificationState("INTEGRITY VERIFIED", "valid");
+    setVerificationState("INTEGRITY AND MEDIA VERIFIED", "valid_trusted");
   } catch (error) {
     renderVerificationFailure(error);
   }
@@ -204,7 +248,7 @@ function renderVerificationFailure(error) {
   verifier.verificationTitle.textContent = "INTEGRITY FAILURE";
   verifier.verificationNarrative.textContent = String(error?.message || "UNKNOWN VERIFICATION ERROR");
   verifier.verifiedDigest.textContent = "NOT TRUSTED";
-  verifier.verifiedSignature.textContent = "INVALID";
+  verifier.verifiedSignature.textContent = "INVALID OR UNTRUSTED";
   verifier.verifiedAt.textContent = "NOT AVAILABLE";
   verifier.verifiedScope.textContent = "NOT AVAILABLE";
   verifier.verifiedMedia.hidden = true;
@@ -221,7 +265,7 @@ function setVerificationState(label, state) {
 function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined).map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -230,8 +274,9 @@ function bufferToHex(buffer) {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function base64ToArrayBuffer(value) {
-  const binary = atob(String(value));
+function base64UrlToArrayBuffer(value) {
+  const normalized = String(value).replaceAll("-", "+").replaceAll("_", "/");
+  const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes.buffer;

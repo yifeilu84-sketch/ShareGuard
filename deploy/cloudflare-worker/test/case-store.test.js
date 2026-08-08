@@ -179,6 +179,12 @@ test("sealing freezes the case projection", async () => {
   assert.equal(sealed.sealed_at, "2026-08-08T04:02:00.000Z");
   assert.equal(await verifyEventChain(sealed.events), true);
 
+  const resealed = await applyCaseCommand(sealed, {
+    type: "seal",
+    payload: { key_id: "sg-signing-2026-01" },
+  }, { actorId: ACTOR_ID });
+  assert.deepEqual(resealed, sealed);
+
   await assert.rejects(
     applyCaseCommand(sealed, {
       type: "provenance",

@@ -8,6 +8,7 @@
   <title>ShareGuard Evidence Package Verifier</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23151b1f'/%3E%3Cpath d='M16 16h32v32H16zM24 32h16' fill='none' stroke='%2355e7d8' stroke-width='5'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="dossier.css">
+  <script src="runtime-config.js" defer></script>
   <script src="i18n.js" defer></script>
   <script src="verifier.js" defer></script>
 </head>
@@ -37,7 +38,7 @@
         <label class="button secondary" for="detachedMediaInput" data-i18n="verifier.detachedTitle">选择签封时对应的原始媒体</label>
         <input id="detachedMediaInput" class="visually-hidden" type="file">
       </div>
-      <p class="decision-disclaimer" data-i18n="verifier.disclaimer">浏览器演示包使用随包公钥验证完整性；生产包还需核验 ShareGuard 私有根证书链。</p>
+      <p class="decision-disclaimer" data-i18n="verifier.disclaimer">验证器只信任预置的 ShareGuard 签发公钥，不接受证据包自行携带的公钥。</p>
     </section>
 
     <section id="verificationResult" class="verification-result" aria-live="polite">
@@ -69,7 +70,7 @@
   </main>
 
   <footer class="verifier-footer">
-    <span>SHAREGUARD DOSSIER FORMAT / VERSION 1</span>
+    <span>SHAREGUARD DOSSIER FORMAT / VERSION 2</span>
     <span>LOCAL CRYPTOGRAPHIC VERIFICATION</span>
   </footer>
 </body>

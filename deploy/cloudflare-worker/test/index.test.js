@@ -3,6 +3,8 @@ import { createHmac } from "node:crypto";
 import test from "node:test";
 
 import { consumeQuotaState, handleRequest } from "../src/index.js";
+import { applyCaseCommand, createCase } from "../src/case-store.js";
+import { publicTrustRoot, verifyEvidencePackage } from "../src/evidence.js";
 
 
 function allowAllLimiter() {
@@ -73,6 +75,79 @@ function persistentCaseStore() {
           },
         };
       },
+    },
+  };
+}
+
+
+async function signingEnvironment() {
+  const pair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  return {
+    SGD_SIGNING_KEY_ID: "sg-signing-test",
+    SGD_SIGNING_ISSUER: "https://shareguard.systems",
+    SGD_SIGNING_PRIVATE_JWK: JSON.stringify(
+      await crypto.subtle.exportKey("jwk", pair.privateKey),
+    ),
+    SGD_SIGNING_PUBLIC_JWK: JSON.stringify(
+      await crypto.subtle.exportKey("jwk", pair.publicKey),
+    ),
+  };
+}
+
+
+async function sealedRecord() {
+  const actorId = `sg_actor_${"c".repeat(32)}`;
+  const created = await createCase({
+    request_id: "sg_req_test",
+    media_sha256: "d".repeat(64),
+    engine_release: "shareguard-screening-2026.08",
+    detector_engine: "shareguard-protected-screening-engine",
+    decision_layer: "shareguard-editorial-policy-v2",
+    machine_recommendation: "review",
+    decision_label: "需要人工复核",
+    risk_level: "high",
+    model_score: 0.91,
+    score_kind: "uncalibrated_ai_generation_score",
+    decision_margin: 0.82,
+    latency_ms: 512,
+    image: { width: 1600, height: 900, format: "JPEG" },
+    report: { report_id: "SG-TEST" },
+  }, {
+    caseId: `sg_case_${"a".repeat(32)}`,
+    versionId: `sg_ver_${"b".repeat(32)}`,
+    actorId,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+  const decided = await applyCaseCommand(created, {
+    type: "decision",
+    payload: { action: "hold", reason_code: "source_unverified" },
+  }, { actorId, now: "2026-08-08T04:01:00.000Z" });
+  return applyCaseCommand(decided, {
+    type: "seal",
+    payload: { key_id: "sg-signing-test" },
+  }, { actorId, now: "2026-08-08T04:02:00.000Z" });
+}
+
+
+function sealingCaseStore(record) {
+  const calls = [];
+  return {
+    calls,
+    binding: {
+      idFromName: key => key,
+      get: () => ({
+        async fetch(input, init) {
+          const request = input instanceof Request
+            ? input
+            : new Request(input, init);
+          calls.push(new URL(request.url).pathname);
+          return new Response(JSON.stringify({ case: record }));
+        },
+      }),
     },
   };
 }
@@ -164,6 +239,86 @@ test("health reports the control plane without waking Modal", async () => {
     case_store: "ready",
     inference: "check_v1_ready",
   });
+});
+
+
+test("trust root and sealing are served without waking Modal", async () => {
+  const signing = await signingEnvironment();
+  const record = await sealedRecord();
+  const store = sealingCaseStore(record);
+  const runtime = { ...env, ...signing, CASE_STORE: store.binding };
+  let upstreamCalled = false;
+  const headers = {
+    Origin: env.ALLOWED_ORIGIN,
+    Authorization: AUTHORIZATION,
+    "CF-Connecting-IP": "203.0.113.70",
+  };
+
+  const trustResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/trust-root", { headers }),
+    runtime,
+    async () => {
+      upstreamCalled = true;
+      return new Response("unexpected");
+    },
+  );
+  const sealResponse = await handleRequest(
+    new Request(
+      `https://api.shareguard.systems/v1/cases/${record.case_id}/seal`,
+      {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: "{}",
+      },
+    ),
+    runtime,
+    async () => {
+      upstreamCalled = true;
+      return new Response("unexpected");
+    },
+  );
+
+  assert.equal(trustResponse.status, 200);
+  assert.deepEqual(await trustResponse.json(), publicTrustRoot(runtime));
+  assert.equal(sealResponse.status, 200);
+  const evidencePackage = await sealResponse.json();
+  assert.equal(
+    (await verifyEvidencePackage(evidencePackage, [publicTrustRoot(runtime)])).valid,
+    true,
+  );
+  assert.equal(upstreamCalled, false);
+  assert.deepEqual(store.calls, [`/cases/${record.case_id}/seal`]);
+});
+
+
+test("sealing fails before changing case state when signing key is unavailable", async () => {
+  const signing = await signingEnvironment();
+  const record = await sealedRecord();
+  const store = sealingCaseStore(record);
+  const response = await handleRequest(
+    new Request(
+      `https://api.shareguard.systems/v1/cases/${record.case_id}/seal`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: AUTHORIZATION,
+          "CF-Connecting-IP": "203.0.113.71",
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      },
+    ),
+    {
+      ...env,
+      ...signing,
+      SGD_SIGNING_PRIVATE_JWK: "",
+      CASE_STORE: store.binding,
+    },
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, "signing_unavailable");
+  assert.equal(store.calls.length, 0);
 });
 
 

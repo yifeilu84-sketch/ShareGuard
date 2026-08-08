@@ -237,7 +237,8 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn('id="stageViewLabel"', html)
         self.assertIn("function selectEvidenceView", script)
         self.assertIn("function runSealingRitual", script)
-        self.assertIn("function createEvidencePackage", script)
+        self.assertIn("function requestServerEvidencePackage", script)
+        self.assertIn("shareguard.sgd.v2", script)
         self.assertIn("ShareGuard Evidence Package Verifier", verifier)
         self.assertIn("crypto.subtle.digest", verifier_script)
         self.assertIn("crypto.subtle.verify", verifier_script)
@@ -270,18 +271,18 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn("requestAnimationFrame(draw)", script)
         self.assertIn('document.addEventListener("visibilitychange"', script)
         self.assertNotIn("window.setInterval(draw, 180)", script)
-        self.assertIn('new Worker("crypto-worker.js")', script)
-        self.assertIn("runMainThreadCrypto", script)
-        self.assertIn("function decodeDataUrl", script)
-        self.assertIn("return decodeDataUrl(dataUrl)", script)
+        self.assertNotIn('new Worker("crypto-worker.js")', script)
+        self.assertNotIn("runMainThreadCrypto", script)
+        self.assertNotIn("function decodeDataUrl", script)
         self.assertIn("data-lens-locked", script)
         self.assertIn("typeWriterEffect", script)
         self.assertIn('headers: { "Accept-Language"', script)
 
         self.assertIn("crypto.subtle.digest", crypto_worker)
-        self.assertIn("crypto.subtle.sign", crypto_worker)
+        self.assertNotIn("crypto.subtle.sign", crypto_worker)
+        self.assertNotIn("crypto.subtle.generateKey", crypto_worker)
         self.assertIn("mediaBuffer", crypto_worker)
-        self.assertIn("stableStringify", crypto_worker)
+        self.assertNotIn("stableStringify", crypto_worker)
 
         self.assertIn("env(safe-area-inset-bottom)", css)
         self.assertIn(".split-indicator", css)
@@ -292,7 +293,7 @@ class PlatformBackendTests(unittest.TestCase):
 
         self.assertIn('id="detachedMediaInput"', verifier_html)
         self.assertIn("verifyDetachedMedia", verifier_script)
-        self.assertIn("MEDIA FILE REQUIRED", verifier_script)
+        self.assertIn("DETACHED MEDIA", verifier_script)
 
     def test_public_demo_package_contains_only_safe_product_assets(self):
         root = Path(__file__).resolve().parents[1]

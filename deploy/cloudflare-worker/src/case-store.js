@@ -383,13 +383,17 @@ export async function applyCaseCommand(record, command, context = {}) {
   if (!await verifyEventChain(record.events)) {
     throw new CaseStoreError(409, "invalid_event_chain", "Case event chain is invalid.");
   }
+  const type = String(command?.type || "");
+  const payload = command?.payload || {};
   if (record.status === "sealed") {
+    const activeKeyId = record.events?.at(-1)?.payload?.key_id;
+    if (type === "seal" && payload.key_id === activeKeyId) {
+      return clone(record);
+    }
     throw new CaseStoreError(409, "case_sealed", "Case is sealed and cannot be changed.");
   }
   const actorId = requiredId(context.actorId, ACTOR_ID_PATTERN, "actor_id");
   const timestamp = currentTimestamp(context.now);
-  const type = String(command?.type || "");
-  const payload = command?.payload || {};
   const next = clone(record);
 
   if (type === "add_version") {

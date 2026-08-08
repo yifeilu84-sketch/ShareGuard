@@ -1,6 +1,5 @@
 "use strict";
 
-const EMBED_MEDIA_LIMIT_BYTES = 8 * 1024 * 1024;
 const i18n = window.ShareGuardI18n;
 const runtimeConfig = window.ShareGuardRuntime || {};
 const EMPTY_CASE = Object.freeze({
@@ -25,6 +24,7 @@ const modelConnection = {
 
 const state = {
   activeCase: { ...EMPTY_CASE },
+  activeCaseRecord: null,
   activePayload: null,
   activeViewIndex: 0,
   currentFile: null,
@@ -427,6 +427,16 @@ function renderAnalysisUnavailable(message) {
 function setAnalysisPayload(payload) {
   const normalized = normalizePayload(payload);
   state.activePayload = normalized;
+  state.activeCaseRecord = normalized.case;
+  if (normalized.case_id) {
+    state.activeCase = {
+      ...state.activeCase,
+      id: normalized.case_id,
+      code: normalized.case_id,
+      timestamp: normalized.case?.created_at || state.activeCase.timestamp
+    };
+    renderCaseContext(state.activeCase);
+  }
   state.propagationViews = normalized.propagation_views;
   state.annotations = normalized.localization.annotations;
   state.provenance = normalized.provenance;
@@ -439,7 +449,7 @@ function setAnalysisPayload(payload) {
   updateCustodySummary(normalized);
   resizeForensicCanvas();
   dom.forceReleaseButton.disabled = false;
-  dom.sealButton.disabled = false;
+  dom.sealButton.disabled = !normalized.case?.human_decision;
   [dom.saveHtmlReportButton, dom.printReportButton, dom.downloadJsonButton, dom.copyReportButton].forEach((button) => { button.disabled = false; });
 }
 
@@ -502,6 +512,11 @@ function normalizePayload(payload) {
       : [scoreNotice, "当前模型未返回像素级定位。", "当前请求未提供可信传播链路数据。"];
   return {
     backend: String(payload.backend || ""),
+    case_id: String(payload.case_id || ""),
+    version_id: String(payload.version_id || ""),
+    case_status: String(payload.case_status || ""),
+    chain_head: String(payload.chain_head || ""),
+    case: payload.case && typeof payload.case === "object" ? payload.case : null,
     request_id: String(payload.request_id || ""),
     model_version: String(payload.model_version || ""),
     detector_engine: detectorEngine,
@@ -580,7 +595,7 @@ function normalizeShadowEvaluation(value) {
   return {
     performed: value?.performed === true,
     status,
-    engine: String(value?.engine || "shareguard-private-v1"),
+    engine: String(value?.engine || "shareguard-protected-screening-engine"),
     affects_decision: false
   };
 }
@@ -590,11 +605,11 @@ function renderLiveEngineState(payload) {
   const engineIndicator = dom.engineLabel.previousElementSibling;
   engineIndicator?.classList.remove("caution", "risk");
   engineIndicator?.classList.add("credible");
-  if (payload.detector_engine === "spai-public-v1" && payload.decision_layer === "shareguard-dossier-v1") {
-    dom.engineLabel.textContent = t("engine.liveSpai", "在线筛查：SPAI PUBLIC V1 / ShareGuard 决策层");
-    return;
-  }
-  dom.engineLabel.textContent = `${payload.detector_engine.toUpperCase()} / ${payload.decision_layer.toUpperCase()}`;
+  dom.engineLabel.textContent = t(
+    "engine.liveProtected",
+    "在线筛查：ShareGuard 受保护筛查引擎 / ShareGuard 决策层"
+  );
+  dom.engineLabel.title = `${payload.model_version || "shareguard-screening"} / ${payload.decision_layer}`;
 }
 
 function renderDecision(payload) {
@@ -1381,25 +1396,23 @@ async function runSealingRitual() {
   dom.sealResult.hidden = true;
   dom.sealButton.disabled = true;
   const steps = [
-    "[01] FREEZE CURRENT DOSSIER STATE",
-    "[02] NORMALIZE MEDIA METADATA",
-    "[03] APPEND CHAIN-OF-CUSTODY EVENTS",
-    "[04] COMPUTE SHA-256 FINGERPRINT",
-    "[05] GENERATE ECDSA P-256 SIGNING KEY",
-    "[06] SIGN CANONICAL EVIDENCE MANIFEST",
-    "[07] ASSEMBLE SHAREGUARD .SGD PACKAGE"
+    "[01] VALIDATE STRUCTURED HUMAN DECISION",
+    "[02] FREEZE SERVER CASE PROJECTION",
+    "[03] APPEND HASH-LINKED SEAL EVENT",
+    "[04] COMPUTE CANONICAL PAYLOAD SHA-256",
+    "[05] REQUEST PROTECTED ISSUER SIGNATURE",
+    "[06] VERIFY PINNED ISSUER IDENTITY",
+    "[07] ASSEMBLE SHAREGUARD .SGD V2 PACKAGE"
   ];
 
   try {
     for (const step of steps.slice(0, 3)) await appendSealLog(step);
-    const evidencePackage = await createEvidencePackage(state.activePayload);
+    const evidencePackage = await requestServerEvidencePackage();
     for (const step of steps.slice(3)) await appendSealLog(step);
-    await appendSealLog(`[OK] CRYPTO PROVIDER ${evidencePackage.crypto_provider.toUpperCase()}`);
-    if (!evidencePackage.manifest.media.embedded) {
-      await appendSealLog("[OK] DETACHED MEDIA MODE / ORIGINAL FILE REQUIRED FOR VERIFICATION");
-    }
-    await appendSealLog(`[OK] DIGEST ${evidencePackage.digest.slice(0, 24).toUpperCase()}...`);
-    await appendSealLog("[OK] BROWSER DEMONSTRATOR SIGNATURE VERIFIED LOCALLY");
+    await appendSealLog(`[OK] ISSUER ${evidencePackage.issuer}`);
+    await appendSealLog(`[OK] KEY ID ${evidencePackage.key_id}`);
+    await appendSealLog(`[OK] DIGEST ${evidencePackage.payload_sha256.slice(0, 24).toUpperCase()}...`);
+    await appendSealLog("[OK] SERVER SIGNATURE / PINNED TRUST ROOT");
     state.evidencePackageBlob = new Blob(
       [JSON.stringify(evidencePackage, null, 2)],
       { type: "application/vnd.shareguard.dossier+json" }
@@ -1407,8 +1420,8 @@ async function runSealingRitual() {
     state.evidencePackageName = `${reportFileStem()}.sgd`;
     dom.sealTitle.textContent = t("seal.complete", "证据包已签封");
     dom.sealResult.hidden = false;
-    dom.custodySeal.textContent = evidencePackage.digest.slice(0, 12).toUpperCase();
-    addCustodyEvent("SEAL-SERVICE", `Evidence package signed: ${evidencePackage.digest.slice(0, 16)}`, "SEALED");
+    dom.custodySeal.textContent = evidencePackage.payload_sha256.slice(0, 12).toUpperCase();
+    addCustodyEvent("SEAL-SERVICE", `Trusted evidence package issued: ${evidencePackage.payload_sha256.slice(0, 16)}`, "SEALED");
   } catch (error) {
     await appendSealLog(`[ERROR] ${String(error?.message || "SIGNING FAILED")}`);
     dom.sealTitle.textContent = t("seal.failed", "签封失败");
@@ -1424,156 +1437,44 @@ async function appendSealLog(line) {
   await wait(reduced ? 10 : 150);
 }
 
-async function createEvidencePackage(payload = state.activePayload) {
-  if (!payload) throw new Error("NO ACTIVE DOSSIER");
-  if (!window.crypto?.subtle) throw new Error("WEB CRYPTO API UNAVAILABLE");
-  const mediaBlob = await mediaBlobForSeal();
-  const mimeType = mediaBlob.type || state.currentFile?.type || "image/jpeg";
-  const embedMedia = mediaBlob.size <= EMBED_MEDIA_LIMIT_BYTES;
-  const manifest = {
-    format: "ShareGuard-Dossier-1",
-    case: {
-      id: state.activeCase.code,
-      title: caseText(state.activeCase, "title"),
-      source: state.activeCase.source,
-      handler: state.activeCase.handler,
-      recorded_at: state.activeCase.timestamp
-    },
-    media: {
-      file_name: payload.file_name,
-      mime_type: mimeType,
-      byte_size: mediaBlob.size
-    },
-    decision: {
-      action: payload.decision,
-      label: decisionLabel(payload.decision),
-      detector_engine: payload.detector_engine,
-      engine_role: payload.engine_role,
-      decision_layer: payload.decision_layer,
-      shadow_evaluation: payload.shadow_evaluation,
-      model_score: payload.model_score,
-      score_kind: payload.score_kind,
-      decision_margin: payload.decision_margin,
-      score_notice: payload.score_notice,
-      uncertainty: payload.uncertainty,
-      reliability: payload.reliability,
-      narrative: payload.report.summary,
-      recommended_action: payload.report.recommended_action
-    },
-    localization: payload.localization,
-    provenance: payload.provenance,
-    robustness_views: state.propagationViews.filter((view) => view.origin === "generated_from_upload").map((view, index) => ({
-      order: index + 1,
-      label: view.label,
-      dimensions: view.size,
-      origin: "generated_from_upload",
-      observed: false
-    })),
-    custody: state.custodyEvents.map((event) => ({ ...event })),
-    sealed_at: new Date().toISOString(),
-    signing_scope: "browser-demonstrator"
+async function requestServerEvidencePackage() {
+  const caseId = state.activePayload?.case_id || state.activeCaseRecord?.case_id;
+  if (!caseId) throw new Error("PERSISTED CASE REQUIRED");
+  if (!state.activeCaseRecord?.human_decision) throw new Error("STRUCTURED HUMAN DECISION REQUIRED");
+  const headers = {
+    "Accept": "application/vnd.shareguard.dossier+json, application/json",
+    "Content-Type": "application/json"
   };
-
-  let cryptoResult;
-  let cryptoProvider = "web-worker";
-  try {
-    cryptoResult = await runCryptoWorker({
-      manifest,
-      mediaBuffer: await mediaBlob.arrayBuffer(),
-      mimeType,
-      embedMedia
-    });
-  } catch (_workerError) {
-    cryptoProvider = "main-thread-fallback";
-    cryptoResult = await runMainThreadCrypto({
-      manifest,
-      mediaBuffer: await mediaBlob.arrayBuffer(),
-      mimeType,
-      embedMedia
-    });
+  if (usesRemoteModel()) {
+    headers.Authorization = basicAuthorization(modelConnection.username, modelConnection.password);
   }
-
-  return {
-    format: "ShareGuard-Evidence-Package-1",
-    manifest: cryptoResult.manifest,
-    digest_algorithm: "SHA-256",
-    digest: cryptoResult.digest,
-    signature_algorithm: "ECDSA-P256-SHA256",
-    signature: cryptoResult.signature,
-    public_key: cryptoResult.public_key,
-    crypto_provider: cryptoProvider,
-    trust_notice: "Browser demonstrator signature. Production packages require the private ShareGuard root certificate service."
-  };
-}
-
-async function mediaBlobForSeal() {
-  if (state.currentFile instanceof Blob) return state.currentFile;
-  if (!state.currentDataUrl) throw new Error("NO UPLOADED MEDIA");
-  return dataUrlToBlob(state.currentDataUrl);
-}
-
-function runCryptoWorker({ manifest, mediaBuffer, mimeType, embedMedia }) {
-  if (!("Worker" in window)) return Promise.reject(new Error("WEB WORKER UNAVAILABLE"));
-  return new Promise((resolve, reject) => {
-    const worker = new Worker("crypto-worker.js");
-    const requestId = `seal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const timeout = window.setTimeout(() => {
-      worker.terminate();
-      reject(new Error("CRYPTO WORKER TIMEOUT"));
-    }, 30_000);
-
-    const finish = (callback, value) => {
-      window.clearTimeout(timeout);
-      worker.terminate();
-      callback(value);
-    };
-    worker.addEventListener("message", (event) => {
-      if (event.data?.requestId !== requestId) return;
-      if (event.data.success) finish(resolve, event.data);
-      else finish(reject, new Error(event.data?.error || "WORKER CRYPTO FAILED"));
-    });
-    worker.addEventListener("error", () => finish(reject, new Error("WORKER INITIALIZATION FAILED")));
-    worker.postMessage(
-      { type: "seal", requestId, manifest, mediaBuffer, mimeType, embedMedia },
-      [mediaBuffer]
-    );
-  });
-}
-
-async function runMainThreadCrypto({ manifest, mediaBuffer, mimeType, embedMedia }) {
-  const mediaBytes = new Uint8Array(mediaBuffer);
-  const mediaDigestBuffer = await crypto.subtle.digest("SHA-256", mediaBytes);
-  const sealedManifest = JSON.parse(JSON.stringify(manifest));
-  sealedManifest.media.sha256 = bufferToHex(mediaDigestBuffer);
-  sealedManifest.media.embedded = Boolean(embedMedia);
-  sealedManifest.media.data_url = embedMedia ? bytesToDataUrl(mediaBytes, mimeType) : null;
-
-  const encoded = new TextEncoder().encode(stableStringify(sealedManifest));
-  const digestBuffer = await crypto.subtle.digest("SHA-256", encoded);
-  const keyPair = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"]
+  const response = await fetch(
+    usesRemoteModel()
+      ? privateApiUrl(`/v1/cases/${encodeURIComponent(caseId)}/seal`)
+      : `/v1/cases/${encodeURIComponent(caseId)}/seal`,
+    {
+      method: "POST",
+      headers,
+      body: "{}",
+      cache: "no-store",
+      credentials: "omit",
+      mode: usesRemoteModel() ? "cors" : "same-origin",
+      referrerPolicy: "no-referrer"
+    }
   );
-  const signatureBuffer = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    keyPair.privateKey,
-    encoded
-  );
-  const valid = await crypto.subtle.verify(
-    { name: "ECDSA", hash: "SHA-256" },
-    keyPair.publicKey,
-    signatureBuffer,
-    encoded
-  );
-  if (!valid) throw new Error("LOCAL SIGNATURE SELF-CHECK FAILED");
-  return {
-    success: true,
-    manifest: sealedManifest,
-    digest: bufferToHex(digestBuffer),
-    signature: arrayBufferToBase64(signatureBuffer),
-    public_key: await crypto.subtle.exportKey("jwk", keyPair.publicKey)
-  };
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || `SEAL SERVICE HTTP ${response.status}`);
+  }
+  if (
+    payload?.schema !== "shareguard.sgd.v2"
+    || !payload.payload_sha256
+    || !payload.signature
+    || !payload.key_id
+  ) {
+    throw new Error("INVALID SERVER EVIDENCE PACKAGE");
+  }
+  return payload;
 }
 
 function renderCustodyLog() {
@@ -1607,64 +1508,10 @@ function updateCustodySummary(payload) {
   dom.custodyCaseCode.textContent = state.activeCase.code;
 }
 
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function bufferToHex(buffer) {
-  return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-  return btoa(binary);
-}
-
-function bytesToDataUrl(bytes, mimeType) {
-  const chunkSize = 0x8000;
-  const chunks = [];
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
-    let binary = "";
-    for (let index = 0; index < chunk.length; index += 1) binary += String.fromCharCode(chunk[index]);
-    chunks.push(binary);
-  }
-  return `data:${mimeType};base64,${btoa(chunks.join(""))}`;
-}
-
 function releaseCurrentObjectUrl() {
   if (!state.currentObjectUrl) return;
   URL.revokeObjectURL(state.currentObjectUrl);
   state.currentObjectUrl = null;
-}
-
-async function dataUrlToBlob(dataUrl) {
-  if (String(dataUrl).startsWith("data:")) return decodeDataUrl(dataUrl);
-  const response = await fetch(dataUrl);
-  if (!response.ok) throw new Error("影像读取失败");
-  return response.blob();
-}
-
-function decodeDataUrl(dataUrl) {
-  const value = String(dataUrl);
-  const commaIndex = value.indexOf(",");
-  if (!value.startsWith("data:") || commaIndex < 0) throw new Error("INVALID DATA URL");
-  const metadata = value.slice(5, commaIndex);
-  const payload = value.slice(commaIndex + 1);
-  const mimeType = metadata.split(";", 1)[0] || "application/octet-stream";
-  if (!metadata.split(";").includes("base64")) {
-    return new Blob([decodeURIComponent(payload)], { type: mimeType });
-  }
-  const binary = atob(payload.replace(/\s/g, ""));
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new Blob([bytes], { type: mimeType });
 }
 
 function readImageDimensions(dataUrl) {

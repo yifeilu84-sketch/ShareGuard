@@ -248,6 +248,10 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('new_sqlite_classes = ["ShareGuardCaseStore"]', config)
         self.assertIn('EDGE_RATE_LIMIT_PER_MINUTE = "10"', config)
         self.assertIn('EDGE_DAILY_QUOTA = "50"', config)
+        self.assertIn('SGD_SIGNING_KEY_ID = "sg-signing-2026-01"', config)
+        self.assertIn('SGD_SIGNING_ISSUER = "https://shareguard.systems"', config)
+        self.assertIn("SGD_SIGNING_PUBLIC_JWK", config)
+        self.assertNotIn("SGD_SIGNING_PRIVATE_JWK", config)
         self.assertIn('name = "shareguard-api-gateway-preview"', preview_config)
         self.assertIn("workers_dev = true", preview_config)
         self.assertIn('ALLOWED_ORIGIN = "https://shareguard.systems"', preview_config)
@@ -263,6 +267,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn("MODAL_ORIGIN", preview_config)
         self.assertNotIn("EDGE_SHARED_SECRET", preview_config)
         self.assertNotIn("EDGE_AUTH_HMAC", preview_config)
+        self.assertIn('SGD_SIGNING_KEY_ID = "sg-signing-2026-01"', preview_config)
+        self.assertIn("SGD_SIGNING_PUBLIC_JWK", preview_config)
+        self.assertNotIn("SGD_SIGNING_PRIVATE_JWK", preview_config)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,9 @@
 import { ShareGuardCaseStore } from "./case-store.js";
+import {
+  assertSigningReady,
+  publicTrustRoot,
+  signEvidence,
+} from "./evidence.js";
 
 export { ShareGuardCaseStore };
 
@@ -7,10 +12,11 @@ const STATIC_ROUTES = new Map([
   ["/v1/health", { kind: "health", methods: new Set(["GET"]) }],
   ["/v1/ready", { kind: "ready", methods: new Set(["GET"]) }],
   ["/v1/analyze", { kind: "analyze", methods: new Set(["POST"]) }],
+  ["/v1/trust-root", { kind: "trust_root", methods: new Set(["GET"]) }],
   ["/v1/cases", { kind: "case_store", methods: new Set(["GET"]) }],
   ["/v1/metrics", { kind: "case_store", methods: new Set(["GET"]) }],
 ]);
-const CASE_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})(?:\/(decision|annotations|provenance|feedback))?$/;
+const CASE_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})(?:\/(decision|annotations|provenance|feedback|seal))?$/;
 
 const EDGE_CLIENT_ID_HEADER = "X-ShareGuard-Client-Id";
 const LEGACY_EDGE_SECRET_HEADER = "X-ShareGuard-Edge-Secret";
@@ -412,6 +418,38 @@ async function proxyCaseStore(request, env, actorId, origin) {
 }
 
 
+async function sealCase(request, env, actorId, origin) {
+  const trustRoot = await assertSigningReady(env);
+  const requestUrl = new URL(request.url);
+  const internalPath = requestUrl.pathname.replace(/^\/v1/, "");
+  const stored = await callCaseStore(env, actorId, internalPath, {
+    method: "POST",
+    payload: { key_id: trustRoot.key_id },
+  });
+  let payload;
+  try {
+    payload = await stored.json();
+  } catch {
+    return jsonResponse(
+      503,
+      "case_store_unavailable",
+      "Case could not be sealed.",
+      origin,
+      env,
+    );
+  }
+  if (!stored.ok || !payload.case) {
+    return jsonPayloadResponse(payload, stored.status || 503, origin, env);
+  }
+  const evidencePackage = await signEvidence(payload.case, env);
+  return jsonPayloadResponse(evidencePackage, 200, origin, env, {
+    "Content-Disposition": (
+      `attachment; filename="${payload.case.case_id}.sgd"`
+    ),
+  });
+}
+
+
 async function consumeDurableQuota(env, clientId) {
   const objectId = env.RATE_LIMITER.idFromName(clientId);
   const response = await env.RATE_LIMITER.get(objectId).fetch(
@@ -624,8 +662,14 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
       );
     }
     const actorId = await authenticatedActorId(request, env);
+    if (route.kind === "trust_root") {
+      return jsonPayloadResponse(publicTrustRoot(env), 200, origin, env);
+    }
     if (route.kind === "case_store") {
-      return proxyCaseStore(request, env, actorId, origin);
+      if (requestUrl.pathname.endsWith("/seal")) {
+        return await sealCase(request, env, actorId, origin);
+      }
+      return await proxyCaseStore(request, env, actorId, origin);
     }
 
     const modalOrigin = parseModalOrigin(env.MODAL_ORIGIN);
@@ -662,10 +706,19 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
       upstreamRequest(request, modalOrigin, { clientId, timestamp, signature }),
     );
     if (route.kind === "analyze") {
-      return persistAnalysis(request, response, env, actorId, origin);
+      return await persistAnalysis(request, response, env, actorId, origin);
     }
     return proxiedResponse(response, origin, env);
   } catch {
+    if (requestUrl.pathname.endsWith("/seal")) {
+      return jsonResponse(
+        503,
+        "signing_unavailable",
+        "Evidence signing is temporarily unavailable.",
+        origin,
+        env,
+      );
+    }
     if (route.kind === "case_store") {
       return jsonResponse(
         503,

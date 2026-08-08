@@ -73,14 +73,17 @@ class ProductionFrontendContractTests(unittest.TestCase):
         self.assertIn("spatial_score_inconsistency", script)
         self.assertIn("reliability.spatialInconsistent", translations)
 
-    def test_production_ui_discloses_spai_screening_and_shareguard_decision_layer(self):
+    def test_production_ui_uses_neutral_protected_engine_identity(self):
         html = (STATIC / "index.html").read_text(encoding="utf-8")
         script = (STATIC / "dossier.js").read_text(encoding="utf-8")
         translations = (STATIC / "i18n.js").read_text(encoding="utf-8")
 
         self.assertIn("payload.detector_engine", script)
         self.assertIn("payload.decision_layer", script)
-        self.assertIn("SPAI", translations)
+        self.assertNotIn("SPAI", translations)
+        self.assertNotIn("spai-public-v1", script.lower())
+        self.assertNotIn("shareguard-private-v1", script.lower())
+        self.assertIn("ShareGuard 受保护筛查引擎", translations)
         self.assertIn("ShareGuard decision layer", translations)
         for outdated_claim in [
             "系统将调用私有模型",
@@ -90,6 +93,34 @@ class ProductionFrontendContractTests(unittest.TestCase):
             self.assertNotIn(outdated_claim, html)
             self.assertNotIn(outdated_claim, script)
             self.assertNotIn(outdated_claim, translations)
+
+    def test_offline_verifier_trusts_only_pinned_v2_issuer_keys(self):
+        verifier = (STATIC / "verifier.js").read_text(encoding="utf-8")
+        runtime = (STATIC / "runtime-config.js").read_text(encoding="utf-8")
+
+        self.assertIn("shareguard.sgd.v2", verifier)
+        self.assertIn("ShareGuardRuntime.trustRoots", verifier)
+        self.assertIn("verifyEventChain", verifier)
+        self.assertIn("payload_sha256", verifier)
+        self.assertIn("valid_trusted", verifier)
+        self.assertNotIn("evidencePackage.public_key", verifier)
+        self.assertNotIn("ShareGuard-Evidence-Package-1", verifier)
+        self.assertIn("trustRoots", runtime)
+        self.assertIn("public_jwk", runtime)
+
+    def test_production_workbench_requests_server_signed_evidence(self):
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+        worker = (STATIC / "crypto-worker.js").read_text(encoding="utf-8")
+
+        self.assertIn('/seal', script)
+        self.assertIn('shareguard.sgd.v2', script)
+        self.assertNotIn('ShareGuard-Evidence-Package-1', script)
+        self.assertNotIn('crypto.subtle.generateKey', script)
+        self.assertNotIn('crypto.subtle.sign', script)
+        self.assertNotIn('public_key', script)
+        self.assertNotIn('request.type === "seal"', worker)
+        self.assertNotIn('crypto.subtle.generateKey', worker)
+        self.assertNotIn('crypto.subtle.sign', worker)
 
 
 if __name__ == "__main__":
