@@ -588,7 +588,7 @@ test("production readiness fails before inference when global storage quota is u
 });
 
 
-test("production analysis stores encrypted media and serves it only through the case route", async () => {
+test("production analysis derives the custody digest when inference omits it", async () => {
   const bytes = new TextEncoder().encode("private camera bytes");
   const digest = createHash("sha256").update(bytes).digest("hex");
   const form = new FormData();
@@ -618,7 +618,6 @@ test("production analysis stores encrypted media and serves it only through the 
     runtime,
     async () => new Response(JSON.stringify({
       request_id: "sg_req_media",
-      media_sha256: digest,
       engine_release: "shareguard-screening-2026.08",
       detector_engine: "shareguard-protected-screening-engine",
       decision_layer: "shareguard-editorial-policy-v2",
@@ -637,6 +636,8 @@ test("production analysis stores encrypted media and serves it only through the 
 
   assert.equal(analyzeResponse.status, 200);
   const analyzed = await analyzeResponse.json();
+  assert.equal(analyzed.media_sha256, digest);
+  assert.equal(analyzed.case.versions[0].media_sha256, digest);
   assert.equal(analyzed.case.versions[0].media_custody.status, "encrypted_private");
   assert.equal(bucket.objects.size, 1);
   const mediaResponse = await handleRequest(

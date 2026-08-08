@@ -1355,6 +1355,7 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
         fileName: media.fileName,
         expectedSha256: analysis.media_sha256,
       });
+      analysis.media_sha256 = mediaCustody.plaintext_sha256;
     } catch {
       await resolveFailedIngest(env, actorId, caseId, versionId, {
         reserved: ingestReserved,
