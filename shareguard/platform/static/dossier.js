@@ -218,12 +218,13 @@ function renderCasePicker() {
     const decision = item.human_decision?.action || item.latest_machine_recommendation || "review";
     const workflow = item.workflow || {};
     const overdue = caseIsOverdue(item);
+    const deletionPending = item.deletion?.status === "pending";
     return `
-      <article class="quarantine-card${overdue ? " overdue" : ""}" data-status="${escapeHtml(item.status)}" data-priority="${escapeHtml(workflow.priority || "normal")}">
+      <article class="quarantine-card${overdue ? " overdue" : ""}" data-status="${escapeHtml(deletionPending ? "deletion_pending" : item.status)}" data-priority="${escapeHtml(workflow.priority || "normal")}">
         <button type="button" data-case-id="${escapeHtml(item.case_id)}">
-          <span><b>${escapeHtml(shortCaseId(item.case_id))}</b><time data-sla-due="${escapeHtml(workflow.sla_due_at || "")}">${escapeHtml(formatSla(workflow.sla_due_at, item.status))}</time></span>
+          <span><b>${escapeHtml(shortCaseId(item.case_id))}</b><time data-sla-due="${escapeHtml(workflow.sla_due_at || "")}">${escapeHtml(deletionPending ? "DELETE PENDING" : formatSla(workflow.sla_due_at, item.status))}</time></span>
           <strong>${escapeHtml(item.title)}</strong>
-          <span><small>${escapeHtml(priorityLabel(workflow.priority))} / ${escapeHtml(workflow.open_task_count || 0)} TASK / ${escapeHtml(workflow.assignee || "未分配")}</small><em>${escapeHtml(humanDecisionLabel(decision))}</em></span>
+          <span><small>${escapeHtml(priorityLabel(workflow.priority))} / ${escapeHtml(workflow.open_task_count || 0)} TASK / ${escapeHtml(workflow.assignee || "未分配")}</small><em>${escapeHtml(deletionPending ? "DELETE PENDING" : humanDecisionLabel(decision))}</em></span>
         </button>
       </article>`;
   }).join("");
@@ -350,10 +351,17 @@ function payloadFromStoredVersion(record, version) {
   };
 }
 
+function caseMutationLocked(record) {
+  return record?.status === "sealed" || record?.deletion?.status === "pending";
+}
+
 function renderPersistentCase(record) {
   const sealed = record.status === "sealed";
+  const deletionPending = record.deletion?.status === "pending";
+  const locked = caseMutationLocked(record);
   state.activeCaseRecord = record;
   document.body.classList.toggle("case-sealed", sealed);
+  document.body.classList.toggle("case-deleting", deletionPending);
   state.selectedVersionId = record.versions?.some((item) => item.version_id === state.selectedVersionId)
     ? state.selectedVersionId
     : record.versions?.at(-1)?.version_id || "";
@@ -377,11 +385,13 @@ function renderPersistentCase(record) {
   dom.custodyDecision.textContent = record.human_decision
     ? humanDecisionLabel(record.human_decision.action).toUpperCase()
     : "HUMAN DECISION PENDING";
-  dom.custodySeal.textContent = record.status === "sealed"
-    ? String(record.chain_head).slice(0, 12).toUpperCase()
-    : "NOT SEALED";
-  dom.forceReleaseButton.disabled = sealed;
-  dom.feedbackButton.disabled = sealed;
+  dom.custodySeal.textContent = deletionPending
+    ? "DELETE PENDING"
+    : record.status === "sealed"
+      ? String(record.chain_head).slice(0, 12).toUpperCase()
+      : "NOT SEALED";
+  dom.forceReleaseButton.disabled = locked;
+  dom.feedbackButton.disabled = locked;
   dom.forceReleaseButton.textContent = record.human_decision
     ? `更新人工决定 · ${humanDecisionLabel(record.human_decision.action)}`
     : "记录人工决定";
@@ -389,26 +399,47 @@ function renderPersistentCase(record) {
     ? `更新结果反馈 · ${feedbackOutcomeLabel(record.feedback.outcome)}`
     : "补录结果反馈";
   dom.caseDeleteButton.disabled = sealed;
-  dom.sealButton.disabled = sealed || !record.human_decision;
-  dom.versionInput.disabled = sealed;
-  dom.versionImportButton.setAttribute("aria-disabled", String(sealed));
-  dom.annotationEditButton.disabled = sealed;
-  dom.annotationNote.disabled = sealed;
-  dom.annotationSaveButton.disabled = sealed;
-  dom.annotationClearButton.disabled = sealed;
+  dom.caseDeleteButton.textContent = deletionPending ? "RETRY SAFE DELETE" : "删除未签封案件";
+  dom.sealButton.disabled = locked || !record.human_decision;
+  dom.versionInput.disabled = locked;
+  dom.versionImportButton.setAttribute("aria-disabled", String(locked));
+  dom.annotationEditButton.disabled = locked;
+  dom.annotationNote.disabled = locked;
+  dom.annotationSaveButton.disabled = locked;
+  dom.annotationClearButton.disabled = locked;
+  dom.reviewerComment.disabled = locked;
+  dom.reviewForm.querySelector('[type="submit"]').disabled = locked;
+  [...dom.reviewGrantForm.elements].forEach((control) => {
+    control.disabled = locked || state.reviewAccess.active;
+  });
   populateWorkflowForms(record);
 }
 
 async function deleteActiveCase() {
   const record = state.activeCaseRecord;
   if (!record || record.status === "sealed") return;
-  if (!window.confirm(`删除未签封案件 ${shortCaseId(record.case_id)}？此操作无法撤销。`)) return;
+  const prompt = record.deletion?.status === "pending"
+    ? `继续清理案件 ${shortCaseId(record.case_id)} 的私有媒体并提交删除？`
+    : `删除未签封案件 ${shortCaseId(record.case_id)}？此操作无法撤销。`;
+  if (!window.confirm(prompt)) return;
   try {
     await apiClient.deleteCase(record.case_id);
     resetActiveCase();
     await refreshPersistentWorkbench();
     showToast("案件已删除。");
   } catch (error) {
+    try {
+      const refreshed = await apiClient.getCase(record.case_id);
+      if (refreshed?.case) renderPersistentCase(refreshed.case);
+      await loadCaseList();
+    } catch (verificationError) {
+      if (verificationError?.status === 404 || verificationError?.code === "case_not_found") {
+        resetActiveCase();
+        await refreshPersistentWorkbench();
+        showToast("案件已删除。");
+        return;
+      }
+    }
     showApiError(error, "案件删除失败。");
   }
 }
@@ -421,6 +452,7 @@ function resetActiveCase() {
   state.selectedVersionId = "";
   state.activeCase = { ...EMPTY_CASE };
   document.body.classList.remove("case-sealed");
+  document.body.classList.remove("case-deleting");
   initializeProductionWorkbench();
   renderCaseContext(state.activeCase);
 }
@@ -691,7 +723,7 @@ function setAnalysisPayload(payload) {
   dom.forceReleaseButton.disabled = false;
   dom.feedbackButton.disabled = false;
   dom.caseDeleteButton.disabled = normalized.case?.status === "sealed";
-  dom.sealButton.disabled = !normalized.case?.human_decision || normalized.case?.status === "sealed";
+  dom.sealButton.disabled = !normalized.case?.human_decision || caseMutationLocked(normalized.case);
   [dom.saveHtmlReportButton, dom.printReportButton, dom.downloadJsonButton, dom.copyReportButton].forEach((button) => { button.disabled = false; });
 }
 
@@ -1188,7 +1220,7 @@ function populateWorkflowForms(record) {
   const feedback = record?.feedback || {};
   dom.feedbackOutcome.value = feedback.outcome || "";
   dom.feedbackBasis.value = feedback.evidence_basis || "";
-  const disabled = record?.status === "sealed";
+  const disabled = caseMutationLocked(record);
   [...dom.provenanceForm.elements, ...dom.decisionForm.elements, ...dom.feedbackForm.elements]
     .forEach((control) => { control.disabled = disabled; });
 }
@@ -1232,7 +1264,9 @@ function renderWorkflow(record) {
   const workflow = record.workflow || {};
   const tasks = Array.isArray(workflow.tasks) ? workflow.tasks : [];
   const openTasks = tasks.filter((task) => task.status === "open");
-  dom.workflowState.textContent = `${caseStatusLabel(record.status)} / ${priorityLabel(workflow.priority)}`;
+  dom.workflowState.textContent = record.deletion?.status === "pending"
+    ? `DELETE PENDING / ${priorityLabel(workflow.priority)}`
+    : `${caseStatusLabel(record.status)} / ${priorityLabel(workflow.priority)}`;
   dom.workflowState.dataset.overdue = String(caseIsOverdue(record));
   dom.workflowDue.textContent = formatSla(workflow.sla_due_at, record.status);
   dom.workflowOpenCount.textContent = String(openTasks.length);
@@ -1241,7 +1275,7 @@ function renderWorkflow(record) {
   dom.workflowTasks.innerHTML = tasks.length
     ? tasks.map((task) => `<article data-status="${escapeHtml(task.status || "open")}"><span>${escapeHtml(taskStatusLabel(task.status))}</span><b>${escapeHtml(task.title || task.type || "Review task")}</b><time>${escapeHtml(formatUtc(task.due_at || task.completed_at))}</time></article>`).join("")
     : '<div class="capability-empty">当前没有任务。</div>';
-  const disabled = record.status === "sealed" || state.reviewAccess.active;
+  const disabled = caseMutationLocked(record) || state.reviewAccess.active;
   dom.workflowPriority.disabled = disabled;
   dom.workflowAssignee.disabled = disabled;
   dom.workflowSaveButton.disabled = disabled;
@@ -1249,7 +1283,7 @@ function renderWorkflow(record) {
 
 async function submitWorkflowUpdate() {
   const record = state.activeCaseRecord;
-  if (!record || record.status === "sealed" || state.reviewAccess.active) return;
+  if (!record || caseMutationLocked(record) || state.reviewAccess.active) return;
   try {
     const payload = await apiClient.updateWorkflow(record.case_id, {
       priority: dom.workflowPriority.value,
@@ -1270,8 +1304,8 @@ async function analyzeObservedVersion(file) {
     showToast("请先打开一个持久案件。");
     return;
   }
-  if (record.status === "sealed") {
-    showToast("已签封案件不能追加版本。");
+  if (caseMutationLocked(record)) {
+    showToast(record.deletion?.status === "pending" ? "案件正在删除，不能追加版本。" : "已签封案件不能追加版本。");
     return;
   }
   if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
@@ -1337,7 +1371,7 @@ async function attachLocalMedia(file) {
 }
 
 function toggleAnnotationEditing() {
-  if (!state.activeCaseRecord || state.activeCaseRecord.status === "sealed") return;
+  if (!state.activeCaseRecord || caseMutationLocked(state.activeCaseRecord)) return;
   if (!state.currentDataUrl) {
     showToast("请先载入当前版本媒体，再进行框选标注。");
     return;
@@ -1353,7 +1387,7 @@ function toggleAnnotationEditing() {
 async function saveReviewerAnnotations() {
   const record = state.activeCaseRecord;
   const versionId = state.selectedVersionId;
-  if (!record || !versionId || record.status === "sealed") return;
+  if (!record || !versionId || caseMutationLocked(record)) return;
   const selected = state.annotations.find((item) => annotationId(item) === state.selectedAnnotationId);
   if (selected && dom.annotationNote.value.trim()) selected.note = dom.annotationNote.value.trim();
   const annotations = state.annotations.map((item, index) => ({
@@ -1377,7 +1411,7 @@ async function saveReviewerAnnotations() {
 }
 
 function deleteSelectedAnnotation() {
-  if (!state.selectedAnnotationId || state.activeCaseRecord?.status === "sealed") return;
+  if (!state.selectedAnnotationId || caseMutationLocked(state.activeCaseRecord)) return;
   state.annotations = state.annotations.filter((item) => annotationId(item) !== state.selectedAnnotationId);
   state.selectedAnnotationId = "";
   dom.annotationNote.value = "";
@@ -1387,7 +1421,7 @@ function deleteSelectedAnnotation() {
 async function submitDeclaredProvenance(event) {
   event.preventDefault();
   const record = state.activeCaseRecord;
-  if (!record || record.status === "sealed") return;
+  if (!record || caseMutationLocked(record)) return;
   const capturedAt = dom.provenanceCapturedAt.value
     ? new Date(dom.provenanceCapturedAt.value).toISOString()
     : "";
@@ -1412,7 +1446,7 @@ async function submitDeclaredProvenance(event) {
 async function submitHumanDecision(event) {
   event.preventDefault();
   const record = state.activeCaseRecord;
-  if (!record || record.status === "sealed") return;
+  if (!record || caseMutationLocked(record)) return;
   const reason = dom.humanDecisionReason.value;
   const note = dom.humanDecisionNote.value.trim();
   if (reason === "other" && !note) {
@@ -1437,7 +1471,7 @@ async function submitHumanDecision(event) {
 async function submitOutcomeFeedback(event) {
   event.preventDefault();
   const record = state.activeCaseRecord;
-  if (!record || record.status === "sealed") return;
+  if (!record || caseMutationLocked(record)) return;
   const outcome = dom.feedbackOutcome.value;
   const basis = dom.feedbackBasis.value.trim();
   if (outcome !== "unresolved" && !basis) {
@@ -1919,7 +1953,7 @@ function bindReviewerControls() {
     event.preventDefault();
     const text = dom.reviewerComment.value.trim();
     const record = state.activeCaseRecord;
-    if (!text || !record) return;
+    if (!text || !record || caseMutationLocked(record)) return;
     try {
       const payload = state.reviewAccess.active
         ? await apiClient.addReviewComment({ body: text })
@@ -2019,7 +2053,7 @@ function renderComments(record) {
 async function submitReviewGrant(event) {
   event.preventDefault();
   const record = state.activeCaseRecord;
-  if (!record || state.reviewAccess.active) return;
+  if (!record || caseMutationLocked(record) || state.reviewAccess.active) return;
   try {
     const payload = await apiClient.issueReviewGrant(record.case_id, {
       reviewer_name: dom.reviewerName.value.trim(),
@@ -2042,7 +2076,8 @@ function renderReviewGrants(record) {
   dom.reviewGrantList.innerHTML = grants.length
     ? grants.map((grant) => {
         const active = !grant.revoked_at && Date.parse(grant.expires_at) > Date.now();
-        return `<article data-active="${active}"><div><b>${escapeHtml(grant.reviewer_name)}</b><span>${active ? "ACTIVE" : grant.revoked_at ? "REVOKED" : "EXPIRED"}</span></div><time>${escapeHtml(formatUtc(grant.expires_at))}</time>${active ? `<button type="button" data-revoke-grant="${escapeHtml(grant.grant_id)}">撤销</button>` : ""}</article>`;
+        const revocable = active && !caseMutationLocked(record);
+        return `<article data-active="${active}"><div><b>${escapeHtml(grant.reviewer_name)}</b><span>${active ? "ACTIVE" : grant.revoked_at ? "REVOKED" : "EXPIRED"}</span></div><time>${escapeHtml(formatUtc(grant.expires_at))}</time>${revocable ? `<button type="button" data-revoke-grant="${escapeHtml(grant.grant_id)}">撤销</button>` : ""}</article>`;
       }).join("")
     : '<div class="capability-empty">尚未签发案件级审查权限。</div>';
   dom.reviewGrantList.querySelectorAll("[data-revoke-grant]").forEach((button) => {
@@ -2052,7 +2087,7 @@ function renderReviewGrants(record) {
 
 async function revokeReviewGrant(grantId) {
   const record = state.activeCaseRecord;
-  if (!record || state.reviewAccess.active) return;
+  if (!record || caseMutationLocked(record) || state.reviewAccess.active) return;
   try {
     const payload = await apiClient.revokeReviewGrant(record.case_id, grantId);
     renderPersistentCase(payload.case);
@@ -2243,6 +2278,7 @@ class ModelConnectionError extends Error {
 }
 
 async function runSealingRitual() {
+  if (!state.activeCaseRecord?.human_decision || caseMutationLocked(state.activeCaseRecord)) return;
   dom.sealDialog.showModal();
   dom.sealTitle.textContent = t("seal.working", "正在生成证据包");
   dom.sealLog.textContent = "";
@@ -2279,7 +2315,7 @@ async function runSealingRitual() {
     await appendSealLog(`[ERROR] ${String(error?.message || "SIGNING FAILED")}`);
     dom.sealTitle.textContent = t("seal.failed", "签封失败");
   } finally {
-    dom.sealButton.disabled = state.activeCaseRecord?.status === "sealed"
+    dom.sealButton.disabled = caseMutationLocked(state.activeCaseRecord)
       || !state.activeCaseRecord?.human_decision;
   }
 }
@@ -2324,6 +2360,7 @@ async function requestServerEvidencePackage() {
   const caseId = state.activePayload?.case_id || state.activeCaseRecord?.case_id;
   if (!caseId) throw new Error("PERSISTED CASE REQUIRED");
   if (!state.activeCaseRecord?.human_decision) throw new Error("STRUCTURED HUMAN DECISION REQUIRED");
+  if (caseMutationLocked(state.activeCaseRecord)) throw new Error("CASE IS IMMUTABLE");
   const payload = await apiClient.sealCase(caseId);
   if (
     payload?.schema !== "shareguard.sgd.v3"

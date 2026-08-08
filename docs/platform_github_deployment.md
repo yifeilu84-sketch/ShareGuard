@@ -118,7 +118,15 @@ field: image
 - `/v1/health` 只表示进程存活，`/v1/ready` 表示模型服务可接收任务。
 - 日志只记录请求 ID、状态和错误类别，不记录图片内容、Token 或模型内部输出。
 
-正式控制面的 P0 配置还必须包含 `MEDIA_BUCKET`、`MEDIA_ENCRYPTION_KEY_B64`、`REVIEW_TOKEN_SECRET` 与 `MEDIA_CUSTODY_REQUIRED=true`。密钥只能通过 `wrangler secret put` 安装，不得写入 `wrangler.toml`、环境模板、GitHub Actions 日志或仓库历史。
+正式控制面的 P0 配置还必须包含 `MEDIA_BUCKET`、`MEDIA_ENCRYPTION_KEY_B64`、`REVIEW_TOKEN_SECRET` 与 `MEDIA_CUSTODY_REQUIRED=true`。轮换媒体密钥前，先将仍在保留期内的旧版本密钥写入仅用于解密的 `MEDIA_DECRYPTION_KEYS_JSON` secret，再同时更新当前密钥和 `MEDIA_ENCRYPTION_KEY_VERSION`。密钥只能通过 `wrangler secret put` 安装，不得写入 `wrangler.toml`、环境模板、GitHub Actions 日志或仓库历史。
+
+删除验收必须覆盖三类故障：R2 删除失败时案件保持冻结且可重试；R2 已清理但 Durable Object 提交失败时再次删除能够幂等完成；提交成功但客户端未收到响应时，后续重试通过最小墓碑返回成功。禁止直接绕过 `delete-plan` / `delete-commit` 协议删除 Durable Object 案件记录。
+
+既有案件的新增版本必须先取得 Durable Object 上传预留再写入 R2。上线验收还要模拟案件提交失败与 R2 清理失败的组合，确认遗留对象转为 `cleanup_required`，签封会先清理它，删除计划也会包含它；任何活动预留都必须使签封和删除返回可重试的冲突响应。
+
+还必须模拟 Durable Object 已提交但响应损坏，以及 R2 已删除但预留释放响应失败：前者应从案件状态恢复成功且不得删除已提交媒体；后者必须保留 `cleanup_required` 并允许后续签封或两阶段删除继续收敛。
+
+若监控发现案件长期保留 `active` 上传预留，所有者使用 `POST /v1/cases/{case_id}/ingest-recovery` 收敛，不得直接编辑 Durable Object。验收应确认该路由保留已提交媒体、清理未提交对象、释放预留，并且审查 token 调用时返回拒绝。
 
 ## 上线前检查
 

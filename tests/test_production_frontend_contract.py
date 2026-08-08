@@ -120,6 +120,17 @@ class ProductionFrontendContractTests(unittest.TestCase):
         self.assertIn("dom.forceReleaseButton.textContent", script)
         self.assertIn("dom.feedbackButton.textContent", script)
 
+    def test_pending_deletion_is_visible_and_freezes_mutating_controls(self):
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+
+        self.assertIn("function caseMutationLocked", script)
+        self.assertIn('record?.deletion?.status === "pending"', script)
+        self.assertIn("DELETE PENDING", script)
+        self.assertIn("RETRY SAFE DELETE", script)
+        self.assertGreaterEqual(script.count("caseMutationLocked(record)"), 8)
+        self.assertIn("verificationError?.status === 404", script)
+        self.assertIn("resetActiveCase();", script)
+
     def test_exports_share_one_canonical_persisted_case_projection(self):
         script = (STATIC / "dossier.js").read_text(encoding="utf-8")
 

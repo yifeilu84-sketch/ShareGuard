@@ -18,6 +18,7 @@ The following values are Cloudflare secrets and must never enter Git:
 - `SGD_SIGNING_PRIVATE_JWK`
 - `MEDIA_ENCRYPTION_KEY_B64`
 - `REVIEW_TOKEN_SECRET`
+- `MEDIA_DECRYPTION_KEYS_JSON` when retained objects use an older media key
 
 The signing public key, key ID, issuer, rate limits, and allowed browser origin
 are non-secret deployment configuration.
@@ -59,9 +60,33 @@ production package.
 
 Production requires the R2 bucket configured as `MEDIA_BUCKET` and a 32-byte
 base64 media-encryption key in `MEDIA_ENCRYPTION_KEY_B64`. The key version is
-recorded in custody metadata so future rotation can be performed without
-pretending older ciphertext used the new key. `MEDIA_CUSTODY_REQUIRED=true`
+recorded in custody metadata. Before rotating the current key, install a secret
+JSON object in `MEDIA_DECRYPTION_KEYS_JSON` that maps every retained historical
+key version to its base64 key; then update the current key and version together.
+The historical keyring is used for decryption only. `MEDIA_CUSTODY_REQUIRED=true`
 causes analysis to fail closed if encrypted persistence cannot be completed.
+
+Adding media to an existing case uses an opaque Durable Object ingest
+reservation before the Worker writes R2. A successful case commit consumes the
+reservation atomically. If case persistence fails and immediate R2 cleanup also
+fails, the reservation becomes `cleanup_required` and remains part of the case
+custody state. Active reservations block sealing and deletion. Before sealing,
+the Worker removes every `cleanup_required` object and releases its reservation;
+the Durable Object checks the reservation set again in the sealing transaction.
+Cleanup always marks the reservation before deleting R2. If an ingest commit
+succeeds but its response is lost, the same settlement route reports the
+committed version and the Worker preserves the referenced object.
+If even the reservation-settlement response is lost, an authenticated owner can
+call `POST /v1/cases/{case_id}/ingest-recovery`. The Worker reconciles every
+incomplete reservation, deletes only media proven uncommitted, and returns the
+refreshed case. Review tokens cannot invoke this route.
+
+Unsealed case deletion uses a retry-safe two-phase protocol. The Durable Object
+first freezes the case and records one hash-linked deletion plan. The Worker
+then deletes every planned R2 object and commits the metadata deletion with the
+same opaque deletion ID. R2 failure leaves the frozen plan available for retry;
+a lost commit response is resolved through a minimal tombstone that contains no
+media or case content. Direct internal case deletion is rejected.
 
 Case owners can issue expiring reviewer grants. Review tokens are HMAC signed
 with `REVIEW_TOKEN_SECRET`, are restricted to one owner and one case, and are

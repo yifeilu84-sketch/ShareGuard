@@ -18,6 +18,9 @@
 - Add failing tests for AES-GCM storage, digest validation, authorization metadata, retrieval, and deletion cleanup.
 - Implement `media-store.js`, R2 configuration, retention metadata, and fail-closed readiness.
 - Persist encrypted bytes before committing analysis ingest and expose authorized media retrieval.
+- Delete unsealed cases through a frozen, retry-safe two-phase R2 and Durable Object protocol.
+- Reserve every additional-version ingest before R2 persistence; block seal/delete while active and track failed cleanup until removal.
+- Provide owner-only recovery for an incomplete ingest reservation when a settlement response is lost.
 - Run Worker and deployment tests and commit.
 
 ## Task 3: Scoped review collaboration

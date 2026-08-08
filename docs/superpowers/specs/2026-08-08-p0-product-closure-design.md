@@ -115,11 +115,31 @@ stores it in private R2 before the case ingest is committed. If persistence
 fails, the analysis request fails rather than returning an apparently tracked
 success. A failed case commit causes best-effort object cleanup.
 
+For an additional version, the case store creates an opaque ingest reservation
+before the R2 write. The final case transaction consumes that exact reservation.
+If the case commit fails and immediate object cleanup also fails, the reservation
+is retained as `cleanup_required` so the object can never become unreferenced.
+An active reservation blocks both deletion and sealing. Sealing first clears any
+known failed-ingest objects, releases their reservations, and then relies on the
+case transaction to recheck that no concurrent reservation exists.
+Cleanup changes the reservation to `cleanup_required` before deleting R2. A
+lost or malformed successful ingest response is reconciled against the case
+transaction; a committed version is returned as success and its media is never
+deleted. A failed release leaves `cleanup_required`, which remains seal/delete
+recoverable rather than reverting to an untracked active state.
+
 Media metadata records storage state, plaintext digest, MIME type, byte size,
 encryption algorithm, key version, retention deadline, and object id. Default
 retention is seven days. An owner may delete an unsealed case and its objects.
 Sealing places included media under evidence hold; later retention and legal
 hold administration are P1.
+
+Deletion is a two-phase, idempotent operation. A deletion request first appends
+a deletion-plan event and freezes every case mutation. The Worker deletes the
+planned private objects and then commits the same deletion ID. Failed object
+cleanup or a failed commit can be retried without changing the plan. A minimal
+content-free tombstone makes a successful commit idempotent when its response
+is lost.
 
 ## `.sgd v3` Evidence Container
 
@@ -149,6 +169,7 @@ Owner-authenticated routes:
 - `GET /v1/cases?status=&priority=&cursor=&limit=`
 - `POST /v1/cases/{id}/workflow`
 - `POST /v1/cases/{id}/comments`
+- `POST /v1/cases/{id}/ingest-recovery`
 - `POST /v1/cases/{id}/review-grants`
 - `POST /v1/cases/{id}/review-grants/{grant_id}/revoke`
 - `GET /v1/cases/{id}/versions/{version_id}/media`
@@ -176,6 +197,10 @@ packages remain verifiable in legacy mode, while all new seals use v3.
   owner authentication.
 - Media digest mismatch, decryption failure, missing objects, or incomplete
   case persistence fails closed with a non-sensitive error.
+- In-flight media ingest blocks deletion and sealing; failed-ingest cleanup is
+  idempotent and remains tracked until its R2 object is removed.
+- An owner-only recovery route settles an orphaned reservation without direct
+  Durable Object access; scoped reviewers cannot invoke it.
 - Sealed cases remain immutable.
 - Formal mode never substitutes a mock response, fixed annotation, generated
   provenance node, or reconstructed image.
@@ -198,3 +223,5 @@ packages remain verifiable in legacy mode, while all new seals use v3.
    credentials, or service origins enter Git.
 8. Worker, Python, frontend-contract, desktop, mobile, and production E2E tests
    pass without fixed A1/A2 markers or fictitious topology.
+9. Concurrent ingest cannot strand an untracked R2 object: active reservations
+   block seal/delete, and a failed cleanup remains in the deletion plan.

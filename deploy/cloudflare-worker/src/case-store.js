@@ -2,6 +2,7 @@ const CASE_ID_PATTERN = /^sg_case_[0-9a-f]{32}$/;
 const VERSION_ID_PATTERN = /^sg_ver_[0-9a-f]{32}$/;
 const ACTOR_ID_PATTERN = /^sg_actor_[0-9a-f]{32}$/;
 const GRANT_ID_PATTERN = /^sg_grant_[0-9a-f]{32}$/;
+const DELETION_ID_PATTERN = /^sg_delete_[0-9a-f]{32}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ZERO_HASH = "0".repeat(64);
 const VERSION_ROLES = new Set([
@@ -165,6 +166,76 @@ function legacyStatus(record) {
 }
 
 
+function mediaDeletionPlan(record) {
+  const versions = (record.versions || []).map(version => ({
+    version_id: version.version_id,
+    custody_status: version.media_custody?.status || "detached_digest_only",
+  }));
+  const committedIds = new Set(versions.map(version => version.version_id));
+  const cleanupReservations = (record.ingest_reservations || [])
+    .filter(reservation => (
+      reservation.status === "cleanup_required" &&
+      !committedIds.has(reservation.version_id)
+    ))
+    .map(reservation => ({
+      version_id: reservation.version_id,
+      custody_status: "encrypted_private",
+    }));
+  return [...versions, ...cleanupReservations];
+}
+
+
+function normalizedIngestReservations(value, record) {
+  const committedIds = new Set((record.versions || []).map(version => version.version_id));
+  if (!Array.isArray(value)) return [];
+  return value.filter(reservation => (
+    reservation &&
+    VERSION_ID_PATTERN.test(String(reservation.version_id || "")) &&
+    !committedIds.has(reservation.version_id) &&
+    new Set(["active", "cleanup_required"]).has(reservation.status) &&
+    !Number.isNaN(Date.parse(String(reservation.reserved_at || ""))) &&
+    !Number.isNaN(Date.parse(String(reservation.updated_at || reservation.reserved_at || "")))
+  )).map(reservation => ({
+    version_id: reservation.version_id,
+    status: reservation.status,
+    reserved_at: new Date(reservation.reserved_at).toISOString(),
+    updated_at: new Date(reservation.updated_at || reservation.reserved_at).toISOString(),
+  }));
+}
+
+
+function normalizedPendingDeletion(value, record) {
+  const deletionEvent = [...(record.events || [])].reverse().find(event => (
+    event?.event_type === "case_deletion_requested" &&
+    DELETION_ID_PATTERN.test(String(event.payload?.deletion_id || "")) &&
+    ACTOR_ID_PATTERN.test(String(event.actor_id || "")) &&
+    !Number.isNaN(Date.parse(String(event.created_at || "")))
+  ));
+  const source = deletionEvent ? {
+    status: "pending",
+    deletion_id: deletionEvent.payload.deletion_id,
+    requested_at: deletionEvent.created_at,
+    requested_by: deletionEvent.actor_id,
+  } : value;
+  if (
+    !source ||
+    source.status !== "pending" ||
+    !DELETION_ID_PATTERN.test(String(source.deletion_id || "")) ||
+    !ACTOR_ID_PATTERN.test(String(source.requested_by || "")) ||
+    Number.isNaN(Date.parse(String(source.requested_at || "")))
+  ) {
+    return null;
+  }
+  return {
+    status: "pending",
+    deletion_id: source.deletion_id,
+    requested_at: new Date(source.requested_at).toISOString(),
+    requested_by: source.requested_by,
+    media_versions: mediaDeletionPlan(record),
+  };
+}
+
+
 export function migrateCaseRecord(record) {
   if (!record || typeof record !== "object") {
     return record;
@@ -201,6 +272,8 @@ export function migrateCaseRecord(record) {
   }
   next.comments = Array.isArray(next.comments) ? next.comments : [];
   next.review_grants = Array.isArray(next.review_grants) ? next.review_grants : [];
+  next.ingest_reservations = normalizedIngestReservations(next.ingest_reservations, next);
+  next.deletion = normalizedPendingDeletion(next.deletion, next);
   if (!next.provenance_graph || typeof next.provenance_graph !== "object") {
     next.provenance_graph = {
       nodes: (next.versions || []).map(mediaGraphNode),
@@ -542,6 +615,8 @@ export async function createCase(analysis, context = {}) {
     workflow: initialWorkflow(version, timestamp, actorId),
     comments: [],
     review_grants: [],
+    ingest_reservations: [],
+    deletion: null,
     provenance_graph: {
       nodes: [mediaGraphNode(version)],
       edges: [],
@@ -641,6 +716,13 @@ export async function applyCaseCommand(record, command, context = {}) {
   }
   if (!new Set(["owner", "reviewer"]).has(accessRole)) {
     throw new CaseStoreError(403, "permission_denied", "Access role is invalid.");
+  }
+  if (migrated.deletion?.status === "pending") {
+    throw new CaseStoreError(
+      409,
+      "case_deletion_pending",
+      "Case deletion is pending and the case cannot be changed.",
+    );
   }
   if (migrated.status === "sealed") {
     const activeKeyId = migrated.events?.at(-1)?.payload?.key_id;
@@ -924,6 +1006,23 @@ export async function applyCaseCommand(record, command, context = {}) {
   }
 
   if (type === "seal") {
+    const reservations = Array.isArray(next.ingest_reservations)
+      ? next.ingest_reservations
+      : [];
+    if (reservations.some(item => item.status === "active")) {
+      throw new CaseStoreError(
+        409,
+        "case_ingest_in_progress",
+        "Case media ingest is still in progress.",
+      );
+    }
+    if (reservations.some(item => item.status === "cleanup_required")) {
+      throw new CaseStoreError(
+        409,
+        "media_cleanup_required",
+        "Uncommitted private media must be cleaned before sealing.",
+      );
+    }
     if (!next.human_decision) {
       throw new CaseStoreError(
         409,
@@ -1062,6 +1161,7 @@ function caseSummary(record) {
       open_task_count: openTasks.length,
       next_task: openTasks[0]?.type || null,
     },
+    deletion: record.deletion,
     chain_head: record.chain_head,
   };
 }
@@ -1153,7 +1253,19 @@ export class ShareGuardCaseStore {
           if (!existing) {
             throw new CaseStoreError(404, "case_not_found", "Case not found.");
           }
-          const next = await applyCaseCommand(existing, {
+          const reservationId = payload.reservation_id
+            ? requiredId(payload.reservation_id, VERSION_ID_PATTERN, "reservation_id")
+            : null;
+          if (reservationId && reservationId !== payload.version_id) {
+            throw new CaseStoreError(409, "ingest_reservation_conflict", "Ingest reservation does not match the version.");
+          }
+          const migrated = migrateCaseRecord(existing);
+          if (reservationId && !migrated.ingest_reservations.some(reservation => (
+            reservation.version_id === reservationId && reservation.status === "active"
+          ))) {
+            throw new CaseStoreError(409, "ingest_reservation_missing", "Active ingest reservation was not found.");
+          }
+          const next = await applyCaseCommand(migrated, {
             type: "add_version",
             payload: {
               analysis: payload.analysis,
@@ -1163,6 +1275,11 @@ export class ShareGuardCaseStore {
               media_custody: payload.media_custody,
             },
           }, { actorId });
+          if (reservationId) {
+            next.ingest_reservations = next.ingest_reservations.filter(
+              reservation => reservation.version_id !== reservationId,
+            );
+          }
           await transaction.put(key, next);
           return next;
         }
@@ -1213,6 +1330,7 @@ export class ShareGuardCaseStore {
     if (segments[0] === "cases" && segments.length >= 2) {
       const caseId = requiredId(segments[1], CASE_ID_PATTERN, "case_id");
       const key = `case:${caseId}`;
+      const tombstoneKey = `deletion:${caseId}`;
       if (request.method === "GET" && segments.length === 2) {
         const record = await this.state.storage.get(key);
         if (!record) {
@@ -1220,23 +1338,220 @@ export class ShareGuardCaseStore {
         }
         return internalJson({ case: migrateCaseRecord(record) });
       }
+      if (
+        request.method === "POST" &&
+        segments.length === 3 &&
+        segments[2] === "ingest-reservations"
+      ) {
+        const payload = await readJson(request);
+        const actorId = requiredId(payload.actor_id, ACTOR_ID_PATTERN, "actor_id");
+        const versionId = requiredId(payload.version_id, VERSION_ID_PATTERN, "version_id");
+        const timestamp = currentTimestamp();
+        const result = await this.state.storage.transaction(async transaction => {
+          const existing = await transaction.get(key);
+          if (!existing) {
+            throw new CaseStoreError(404, "case_not_found", "Case not found.");
+          }
+          const migrated = migrateCaseRecord(existing);
+          if (!await verifyEventChain(migrated.events)) {
+            throw new CaseStoreError(409, "invalid_event_chain", "Case event chain is invalid.");
+          }
+          if (migrated.deletion?.status === "pending") {
+            throw new CaseStoreError(409, "case_deletion_pending", "Case deletion is pending.");
+          }
+          if (migrated.status === "sealed") {
+            throw new CaseStoreError(409, "case_sealed", "Case is sealed and cannot be changed.");
+          }
+          if (migrated.versions.some(version => version.version_id === versionId)) {
+            throw new CaseStoreError(409, "duplicate_version", "Version already exists in the case.");
+          }
+          const current = migrated.ingest_reservations.find(
+            reservation => reservation.version_id === versionId,
+          );
+          if (current) {
+            return { reservation: current, created: false };
+          }
+          const reservation = {
+            version_id: versionId,
+            status: "active",
+            reserved_at: timestamp,
+            updated_at: timestamp,
+          };
+          migrated.ingest_reservations.push(reservation);
+          await transaction.put(key, migrated);
+          return { reservation, created: true };
+        });
+        return internalJson(
+          { reservation: result.reservation },
+          result.created ? 201 : 200,
+        );
+      }
+      if (
+        request.method === "POST" &&
+        segments.length === 5 &&
+        segments[2] === "ingest-reservations" &&
+        new Set(["release", "abandon"]).has(segments[4])
+      ) {
+        const versionId = requiredId(segments[3], VERSION_ID_PATTERN, "version_id");
+        const action = segments[4];
+        const payload = await readJson(request);
+        requiredId(payload.actor_id, ACTOR_ID_PATTERN, "actor_id");
+        const timestamp = currentTimestamp();
+        const result = await this.state.storage.transaction(async transaction => {
+          const existing = await transaction.get(key);
+          if (!existing) {
+            throw new CaseStoreError(404, "case_not_found", "Case not found.");
+          }
+          const migrated = migrateCaseRecord(existing);
+          if (!await verifyEventChain(migrated.events)) {
+            throw new CaseStoreError(409, "invalid_event_chain", "Case event chain is invalid.");
+          }
+          const committedVersion = migrated.versions.find(
+            item => item.version_id === versionId,
+          );
+          if (committedVersion) {
+            return {
+              committed: true,
+              version_id: versionId,
+              case: migrated,
+            };
+          }
+          const reservation = migrated.ingest_reservations.find(
+            item => item.version_id === versionId,
+          );
+          if (!reservation) {
+            return { released: true, version_id: versionId };
+          }
+          if (action === "release") {
+            migrated.ingest_reservations = migrated.ingest_reservations.filter(
+              item => item.version_id !== versionId,
+            );
+            await transaction.put(key, migrated);
+            return { released: true, version_id: versionId };
+          }
+          reservation.status = "cleanup_required";
+          reservation.updated_at = timestamp;
+          await transaction.put(key, migrated);
+          return { reservation };
+        });
+        return internalJson(result);
+      }
+      if (
+        request.method === "POST" &&
+        segments.length === 3 &&
+        segments[2] === "delete-plan"
+      ) {
+        const payload = await readJson(request);
+        const actorId = requiredId(payload.actor_id, ACTOR_ID_PATTERN, "actor_id");
+        const timestamp = currentTimestamp();
+        const plan = await this.state.storage.transaction(async transaction => {
+          const existing = await transaction.get(key);
+          if (!existing) {
+            const tombstone = await transaction.get(tombstoneKey);
+            if (tombstone?.deleted === true) {
+              return {
+                deleted: true,
+                case_id: tombstone.case_id,
+                deletion_id: tombstone.deletion_id,
+              };
+            }
+            throw new CaseStoreError(404, "case_not_found", "Case not found.");
+          }
+          const migrated = migrateCaseRecord(existing);
+          if (!await verifyEventChain(migrated.events)) {
+            throw new CaseStoreError(409, "invalid_event_chain", "Case event chain is invalid.");
+          }
+          if (migrated.status === "sealed") {
+            throw new CaseStoreError(409, "case_sealed", "A sealed case cannot be deleted.");
+          }
+          if (migrated.ingest_reservations.some(reservation => reservation.status === "active")) {
+            throw new CaseStoreError(
+              409,
+              "case_ingest_in_progress",
+              "A media version is still being persisted; retry deletion after it settles.",
+            );
+          }
+          if (!migrated.deletion) {
+            migrated.deletion = {
+              status: "pending",
+              deletion_id: randomId("sg_delete"),
+              requested_at: timestamp,
+              requested_by: actorId,
+              media_versions: mediaDeletionPlan(migrated),
+            };
+            await appendEvent(migrated, "case_deletion_requested", {
+              deletion_id: migrated.deletion.deletion_id,
+              media_versions: migrated.deletion.media_versions,
+            }, actorId, timestamp);
+            await transaction.put(key, migrated);
+          }
+          return {
+            deletion_id: migrated.deletion.deletion_id,
+            case_id: migrated.case_id,
+            media_versions: migrated.deletion.media_versions,
+          };
+        });
+        return internalJson(plan);
+      }
+      if (
+        request.method === "POST" &&
+        segments.length === 3 &&
+        segments[2] === "delete-commit"
+      ) {
+        const payload = await readJson(request);
+        const actorId = requiredId(payload.actor_id, ACTOR_ID_PATTERN, "actor_id");
+        const deletionId = requiredId(
+          payload.deletion_id,
+          DELETION_ID_PATTERN,
+          "deletion_id",
+        );
+        const timestamp = currentTimestamp();
+        const result = await this.state.storage.transaction(async transaction => {
+          const existing = await transaction.get(key);
+          if (!existing) {
+            const tombstone = await transaction.get(tombstoneKey);
+            if (tombstone?.deletion_id === deletionId) {
+              return tombstone;
+            }
+            if (tombstone) {
+              throw new CaseStoreError(409, "deletion_conflict", "Deletion identifier does not match.");
+            }
+            throw new CaseStoreError(404, "case_not_found", "Case not found.");
+          }
+          const migrated = migrateCaseRecord(existing);
+          if (!await verifyEventChain(migrated.events)) {
+            throw new CaseStoreError(409, "invalid_event_chain", "Case event chain is invalid.");
+          }
+          if (migrated.deletion?.deletion_id !== deletionId) {
+            throw new CaseStoreError(409, "deletion_conflict", "Deletion identifier does not match.");
+          }
+          const tombstone = {
+            deleted: true,
+            case_id: caseId,
+            deletion_id: deletionId,
+            deleted_at: timestamp,
+            deleted_by: actorId,
+          };
+          await transaction.delete(key);
+          await transaction.put(tombstoneKey, tombstone);
+          return tombstone;
+        });
+        return internalJson({
+          deleted: true,
+          case_id: result.case_id,
+          deletion_id: result.deletion_id,
+        });
+      }
       if (request.method === "DELETE" && segments.length === 2) {
         const record = await this.state.storage.get(key);
         if (!record) {
           throw new CaseStoreError(404, "case_not_found", "Case not found.");
         }
-        if (record.status === "sealed") {
-          throw new CaseStoreError(409, "case_sealed", "A sealed case cannot be deleted.");
-        }
-        await this.state.storage.delete(key);
-        return internalJson({
-          deleted: true,
-          case_id: caseId,
-          media_versions: (record.versions || []).map(version => ({
-            version_id: version.version_id,
-            custody_status: version.media_custody?.status || "detached_digest_only",
-          })),
-        });
+        throw new CaseStoreError(
+          409,
+          "deletion_protocol_required",
+          "Case deletion requires the two-phase deletion protocol.",
+        );
       }
       if (request.method === "POST" && segments.length === 3) {
         const commandType = {

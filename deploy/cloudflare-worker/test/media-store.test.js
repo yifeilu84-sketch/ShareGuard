@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   deletePrivateMedia,
   mediaObjectKey,
+  privateMediaReady,
   readPrivateMedia,
   storePrivateMedia,
 } from "../src/media-store.js";
@@ -135,4 +136,65 @@ test("private media refuses tampered ciphertext", async () => {
     readPrivateMedia(env, { actorId: ACTOR_ID, caseId: CASE_ID, versionId: VERSION_ID, custody }),
     /decrypt|integrity/i,
   );
+});
+
+
+test("private media remains decryptable after a key rotation with an explicit historical keyring", async () => {
+  const bucket = memoryBucket();
+  const plain = new TextEncoder().encode("retained evidence across key rotation");
+  const originalEnv = {
+    MEDIA_BUCKET: bucket,
+    MEDIA_ENCRYPTION_KEY_B64: KEY_B64,
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-2026-01",
+  };
+  const custody = await storePrivateMedia(originalEnv, {
+    actorId: ACTOR_ID,
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    bytes: plain,
+    contentType: "image/jpeg",
+    fileName: "retained.jpg",
+  });
+  const rotatedEnv = {
+    MEDIA_BUCKET: bucket,
+    MEDIA_ENCRYPTION_KEY_B64: Buffer.alloc(32, 8).toString("base64"),
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-2026-02",
+  };
+
+  await assert.rejects(
+    readPrivateMedia(rotatedEnv, {
+      actorId: ACTOR_ID,
+      caseId: CASE_ID,
+      versionId: VERSION_ID,
+      custody,
+    }),
+    /key version|decrypt/i,
+  );
+
+  rotatedEnv.MEDIA_DECRYPTION_KEYS_JSON = JSON.stringify({
+    "media-2026-01": KEY_B64,
+  });
+  const recovered = await readPrivateMedia(rotatedEnv, {
+    actorId: ACTOR_ID,
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    custody,
+  });
+  assert.deepEqual(recovered.bytes, plain);
+});
+
+
+test("private media readiness rejects a malformed historical decryption keyring", () => {
+  const env = {
+    MEDIA_BUCKET: memoryBucket(),
+    MEDIA_ENCRYPTION_KEY_B64: KEY_B64,
+    MEDIA_ENCRYPTION_KEY_VERSION: "media-2026-02",
+    MEDIA_DECRYPTION_KEYS_JSON: JSON.stringify({
+      "media-2026-01": Buffer.alloc(16, 4).toString("base64"),
+    }),
+  };
+
+  assert.equal(privateMediaReady(env), false);
+  env.MEDIA_DECRYPTION_KEYS_JSON = JSON.stringify({ "media-2026-01": KEY_B64 });
+  assert.equal(privateMediaReady(env), true);
 });

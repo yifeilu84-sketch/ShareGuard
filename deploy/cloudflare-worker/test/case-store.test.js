@@ -8,6 +8,7 @@ import {
   createCase,
   migrateCaseRecord,
   reviewGrantIsActive,
+  ShareGuardCaseStore,
   sortCaseSummaries,
   verifyEventChain,
 } from "../src/case-store.js";
@@ -40,6 +41,48 @@ function analysis(overrides = {}) {
       format: "JPEG",
     },
     report: { report_id: "SG-TEST" },
+    ...overrides,
+  };
+}
+
+
+function memoryStorage() {
+  const values = new Map();
+  const storage = {
+    async get(key) {
+      return values.get(key);
+    },
+    async put(key, value) {
+      values.set(key, value);
+    },
+    async delete(key) {
+      return values.delete(key);
+    },
+    async list(options = {}) {
+      return new Map([...values].filter(([key]) => key.startsWith(options.prefix || "")));
+    },
+    async transaction(callback) {
+      return callback(storage);
+    },
+  };
+  return { storage, values };
+}
+
+
+function encryptedCustody(overrides = {}) {
+  return {
+    status: "encrypted_private",
+    plaintext_sha256: "d".repeat(64),
+    byte_size: 1024,
+    content_type: "image/jpeg",
+    file_name: "camera.jpg",
+    stored_at: "2026-08-08T04:00:00.000Z",
+    retention_until: "2026-08-15T04:00:00.000Z",
+    encryption: {
+      algorithm: "AES-256-GCM",
+      key_version: "v1",
+      iv: "AQIDBAUGBwgJCgsM",
+    },
     ...overrides,
   };
 }
@@ -385,6 +428,219 @@ test("sealing freezes the case projection", async () => {
     }, { actorId: ACTOR_ID }),
     /sealed/,
   );
+});
+
+
+test("two-phase deletion freezes a case and retries with one stable plan", async () => {
+  const { storage } = memoryStorage();
+  const record = await createCase(analysis(), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    versionRole: "original",
+    fileName: "camera.jpg",
+    mediaCustody: encryptedCustody(),
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+  await storage.put(`case:${CASE_ID}`, record);
+  const object = new ShareGuardCaseStore({ storage }, {});
+  const post = (path, payload) => object.fetch(new Request(
+    `https://shareguard-case-store.internal${path}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, actor_id: ACTOR_ID }),
+    },
+  ));
+
+  const firstPlanResponse = await post(`/cases/${CASE_ID}/delete-plan`, {});
+  assert.equal(firstPlanResponse.status, 200);
+  const firstPlan = await firstPlanResponse.json();
+  assert.match(firstPlan.deletion_id, /^sg_delete_[0-9a-f]{32}$/);
+  assert.deepEqual(firstPlan.media_versions, [{
+    version_id: VERSION_ID,
+    custody_status: "encrypted_private",
+  }]);
+
+  const retryPlan = await (await post(`/cases/${CASE_ID}/delete-plan`, {})).json();
+  assert.equal(retryPlan.deletion_id, firstPlan.deletion_id);
+  const pending = await storage.get(`case:${CASE_ID}`);
+  assert.equal(pending.deletion.status, "pending");
+  assert.equal(pending.events.at(-1).event_type, "case_deletion_requested");
+  assert.equal(
+    pending.events.filter(event => event.event_type === "case_deletion_requested").length,
+    1,
+  );
+  assert.equal(await verifyEventChain(pending.events), true);
+  const projectionMissing = structuredClone(pending);
+  delete projectionMissing.deletion;
+  const recoveredProjection = migrateCaseRecord(projectionMissing);
+  assert.equal(recoveredProjection.deletion.status, "pending");
+  assert.equal(recoveredProjection.deletion.deletion_id, firstPlan.deletion_id);
+  await assert.rejects(
+    applyCaseCommand(recoveredProjection, {
+      type: "workflow",
+      payload: { priority: "low" },
+    }, { actorId: ACTOR_ID }),
+    error => error.code === "case_deletion_pending",
+  );
+
+  const workflowResponse = await post(`/cases/${CASE_ID}/workflow`, { priority: "low" });
+  assert.equal(workflowResponse.status, 409);
+  assert.equal((await workflowResponse.json()).error.code, "case_deletion_pending");
+  const ingestResponse = await post("/ingest", {
+    case_id: CASE_ID,
+    version_id: `sg_ver_${"1".repeat(32)}`,
+    version_role: "observed_variant",
+    file_name: "variant.jpg",
+    media_custody: encryptedCustody({
+      file_name: "variant.jpg",
+      plaintext_sha256: "e".repeat(64),
+    }),
+    analysis: analysis({ media_sha256: "e".repeat(64) }),
+  });
+  assert.equal(ingestResponse.status, 409);
+  assert.equal((await ingestResponse.json()).error.code, "case_deletion_pending");
+
+  const directDelete = await object.fetch(new Request(
+    `https://shareguard-case-store.internal/cases/${CASE_ID}`,
+    { method: "DELETE" },
+  ));
+  assert.equal(directDelete.status, 409);
+  assert.equal((await directDelete.json()).error.code, "deletion_protocol_required");
+
+  const conflict = await post(`/cases/${CASE_ID}/delete-commit`, {
+    deletion_id: `sg_delete_${"f".repeat(32)}`,
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).error.code, "deletion_conflict");
+  assert.ok(await storage.get(`case:${CASE_ID}`));
+
+  const committed = await post(`/cases/${CASE_ID}/delete-commit`, {
+    deletion_id: firstPlan.deletion_id,
+  });
+  assert.equal(committed.status, 200);
+  assert.deepEqual(await committed.json(), {
+    deleted: true,
+    case_id: CASE_ID,
+    deletion_id: firstPlan.deletion_id,
+  });
+  assert.equal(await storage.get(`case:${CASE_ID}`), undefined);
+
+  const committedAgain = await post(`/cases/${CASE_ID}/delete-commit`, {
+    deletion_id: firstPlan.deletion_id,
+  });
+  assert.equal(committedAgain.status, 200);
+  assert.equal((await committedAgain.json()).deleted, true);
+  const planAfterCommit = await post(`/cases/${CASE_ID}/delete-plan`, {});
+  assert.equal(planAfterCommit.status, 200);
+  assert.deepEqual(await planAfterCommit.json(), {
+    deleted: true,
+    case_id: CASE_ID,
+    deletion_id: firstPlan.deletion_id,
+  });
+});
+
+
+test("an active media ingest reservation blocks deletion and failed cleanup joins the plan", async () => {
+  const { storage } = memoryStorage();
+  const created = await createCase(analysis(), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+  const record = await applyCaseCommand(created, {
+    type: "decision",
+    payload: { action: "allow", reason_code: "source_verified" },
+  }, { actorId: ACTOR_ID, now: "2026-08-08T04:00:30.000Z" });
+  await storage.put(`case:${CASE_ID}`, record);
+  const object = new ShareGuardCaseStore({ storage }, {});
+  const reservedVersionId = `sg_ver_${"1".repeat(32)}`;
+  const post = (path, payload = {}) => object.fetch(new Request(
+    `https://shareguard-case-store.internal${path}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, actor_id: ACTOR_ID }),
+    },
+  ));
+
+  const reserved = await post(`/cases/${CASE_ID}/ingest-reservations`, {
+    version_id: reservedVersionId,
+  });
+  assert.equal(reserved.status, 201);
+  assert.equal((await reserved.json()).reservation.status, "active");
+
+  const activeSeal = await post(`/cases/${CASE_ID}/seal`, { key_id: "sg-signing-test" });
+  assert.equal(activeSeal.status, 409);
+  assert.equal((await activeSeal.json()).error.code, "case_ingest_in_progress");
+
+  const busyPlan = await post(`/cases/${CASE_ID}/delete-plan`);
+  assert.equal(busyPlan.status, 409);
+  assert.equal((await busyPlan.json()).error.code, "case_ingest_in_progress");
+  assert.equal((await storage.get(`case:${CASE_ID}`)).deletion, null);
+
+  const abandoned = await post(
+    `/cases/${CASE_ID}/ingest-reservations/${reservedVersionId}/abandon`,
+  );
+  assert.equal(abandoned.status, 200);
+  assert.equal((await abandoned.json()).reservation.status, "cleanup_required");
+
+  const dirtySeal = await post(`/cases/${CASE_ID}/seal`, { key_id: "sg-signing-test" });
+  assert.equal(dirtySeal.status, 409);
+  assert.equal((await dirtySeal.json()).error.code, "media_cleanup_required");
+
+  const plan = await (await post(`/cases/${CASE_ID}/delete-plan`)).json();
+  assert.deepEqual(plan.media_versions, [
+    { version_id: VERSION_ID, custody_status: "detached_digest_only" },
+    { version_id: reservedVersionId, custody_status: "encrypted_private" },
+  ]);
+  assert.equal((await storage.get(`case:${CASE_ID}`)).deletion.status, "pending");
+});
+
+
+test("abandoning an ingest after a lost commit response reports the committed version", async () => {
+  const { storage } = memoryStorage();
+  const created = await createCase(analysis(), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    actorId: ACTOR_ID,
+    now: "2026-08-08T06:00:00.000Z",
+  });
+  await storage.put(`case:${CASE_ID}`, created);
+  const object = new ShareGuardCaseStore({ storage }, {});
+  const committedVersionId = `sg_ver_${"2".repeat(32)}`;
+  const post = (path, payload = {}) => object.fetch(new Request(
+    `https://shareguard-case-store.internal${path}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, actor_id: ACTOR_ID }),
+    },
+  ));
+
+  assert.equal((await post(`/cases/${CASE_ID}/ingest-reservations`, {
+    version_id: committedVersionId,
+  })).status, 201);
+  const committed = await post("/ingest", {
+    case_id: CASE_ID,
+    version_id: committedVersionId,
+    reservation_id: committedVersionId,
+    version_role: "observed_variant",
+    file_name: "observed.jpg",
+    analysis: analysis({ media_sha256: "9".repeat(64) }),
+  });
+  assert.equal(committed.status, 200);
+
+  const reconciled = await post(
+    `/cases/${CASE_ID}/ingest-reservations/${committedVersionId}/abandon`,
+  );
+  assert.equal(reconciled.status, 200);
+  const payload = await reconciled.json();
+  assert.equal(payload.committed, true);
+  assert.equal(payload.version_id, committedVersionId);
+  assert.equal(payload.case.versions.at(-1).version_id, committedVersionId);
 });
 
 

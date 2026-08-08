@@ -17,11 +17,19 @@ function base64UrlEncode(bytes) {
 
 
 function base64UrlDecode(value) {
-  const normalized = String(value || "").replaceAll("-", "+").replaceAll("_", "/");
+  const encoded = String(value || "");
+  if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+    throw new Error("review token is invalid");
+  }
+  const normalized = encoded.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
   try {
     const binary = atob(padded);
-    return Uint8Array.from(binary, character => character.charCodeAt(0));
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+    if (base64UrlEncode(bytes) !== encoded) {
+      throw new Error("review token is invalid");
+    }
+    return bytes;
   } catch {
     throw new Error("review token is invalid");
   }

@@ -56,8 +56,56 @@ async function sha256Hex(bytes) {
 }
 
 
-async function encryptionKey(env) {
-  const keyBytes = decodeBase64(env.MEDIA_ENCRYPTION_KEY_B64);
+function keyVersion(value) {
+  const normalized = String(value || "media-v1").trim();
+  if (!normalized || normalized.length > 64) {
+    throw new Error("media encryption key version is invalid");
+  }
+  return normalized;
+}
+
+
+function historicalKeyring(env) {
+  const encoded = String(env?.MEDIA_DECRYPTION_KEYS_JSON || "").trim();
+  if (!encoded) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(encoded);
+  } catch {
+    throw new Error("media decryption keyring is invalid");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("media decryption keyring is invalid");
+  }
+  for (const [version, value] of Object.entries(parsed)) {
+    keyVersion(version);
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error("media decryption keyring is invalid");
+    }
+    if (decodeBase64(value).length !== 32) {
+      throw new Error("media decryption keyring is invalid");
+    }
+  }
+  return parsed;
+}
+
+
+function encodedKeyForVersion(env, requestedVersion) {
+  const requested = keyVersion(requestedVersion);
+  const current = keyVersion(env?.MEDIA_ENCRYPTION_KEY_VERSION);
+  if (requested === current) {
+    return env?.MEDIA_ENCRYPTION_KEY_B64;
+  }
+  const historical = historicalKeyring(env);
+  if (!Object.hasOwn(historical, requested)) {
+    throw new Error("media encryption key version is unavailable");
+  }
+  return historical[requested];
+}
+
+
+async function encryptionKey(env, requestedVersion) {
+  const keyBytes = decodeBase64(encodedKeyForVersion(env, requestedVersion));
   if (keyBytes.length !== 32) {
     throw new Error("media encryption key must contain 32 bytes");
   }
@@ -98,12 +146,20 @@ export function mediaObjectKey(actorId, caseId, versionId) {
 
 
 export function privateMediaReady(env) {
-  return Boolean(
-    env?.MEDIA_BUCKET &&
-    typeof env.MEDIA_BUCKET.put === "function" &&
-    typeof env.MEDIA_BUCKET.get === "function" &&
-    String(env.MEDIA_ENCRYPTION_KEY_B64 || "").trim(),
-  );
+  try {
+    const currentVersion = keyVersion(env?.MEDIA_ENCRYPTION_KEY_VERSION);
+    const currentKey = decodeBase64(encodedKeyForVersion(env, currentVersion));
+    historicalKeyring(env);
+    return Boolean(
+      env?.MEDIA_BUCKET &&
+      typeof env.MEDIA_BUCKET.put === "function" &&
+      typeof env.MEDIA_BUCKET.get === "function" &&
+      typeof env.MEDIA_BUCKET.delete === "function" &&
+      currentKey.length === 32,
+    );
+  } catch {
+    return false;
+  }
 }
 
 
@@ -126,16 +182,13 @@ export async function storePrivateMedia(env, options) {
   if (expected && (!SHA256_PATTERN.test(expected) || expected !== digest)) {
     throw new Error("media digest does not match inference result");
   }
-  const keyVersion = String(env.MEDIA_ENCRYPTION_KEY_VERSION || "media-v1").trim();
-  if (!keyVersion || keyVersion.length > 64) {
-    throw new Error("media encryption key version is invalid");
-  }
+  const currentKeyVersion = keyVersion(env.MEDIA_ENCRYPTION_KEY_VERSION);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await encryptionKey(env);
+  const key = await encryptionKey(env, currentKeyVersion);
   const ciphertext = await crypto.subtle.encrypt({
     name: "AES-GCM",
     iv,
-    additionalData: metadataAad({ actorId, caseId, versionId, digest, contentType, keyVersion }),
+    additionalData: metadataAad({ actorId, caseId, versionId, digest, contentType, keyVersion: currentKeyVersion }),
     tagLength: 128,
   }, key, bytes);
   const now = new Date(options.now || Date.now());
@@ -152,7 +205,7 @@ export async function storePrivateMedia(env, options) {
     retention_until: retentionUntil.toISOString(),
     encryption: {
       algorithm: "AES-256-GCM",
-      key_version: keyVersion,
+      key_version: currentKeyVersion,
       iv: base64UrlEncode(iv),
     },
   };
@@ -161,7 +214,7 @@ export async function storePrivateMedia(env, options) {
       schema: "shareguard.private-media.v1",
       digest,
       content_type: contentType,
-      key_version: keyVersion,
+      key_version: currentKeyVersion,
       iv: custody.encryption.iv,
     },
   });
@@ -191,7 +244,7 @@ export async function readPrivateMedia(env, options) {
   const contentType = String(custody.content_type || "application/octet-stream");
   const keyVersion = String(custody.encryption?.key_version || "");
   try {
-    const key = await encryptionKey(env);
+    const key = await encryptionKey(env, keyVersion);
     const plaintext = await crypto.subtle.decrypt({
       name: "AES-GCM",
       iv,
@@ -216,7 +269,9 @@ export async function readPrivateMedia(env, options) {
 
 
 export async function deletePrivateMedia(env, options) {
-  if (!env?.MEDIA_BUCKET || typeof env.MEDIA_BUCKET.delete !== "function") return;
+  if (!env?.MEDIA_BUCKET || typeof env.MEDIA_BUCKET.delete !== "function") {
+    throw new Error("private media bucket is unavailable");
+  }
   await env.MEDIA_BUCKET.delete(mediaObjectKey(
     options.actorId,
     options.caseId,

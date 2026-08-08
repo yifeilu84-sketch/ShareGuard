@@ -26,6 +26,7 @@ const STATIC_ROUTES = new Map([
 const CASE_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})(?:\/(decision|annotations|provenance|feedback|workflow|comments|seal))?$/;
 const CASE_MEDIA_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})\/versions\/(sg_ver_[0-9a-f]{32})\/media$/;
 const CASE_REVIEW_GRANT_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})\/review-grants(?:\/(sg_grant_[0-9a-f]{32})\/revoke)?$/;
+const CASE_INGEST_RECOVERY_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})\/ingest-recovery$/;
 const REVIEW_MEDIA_ROUTE = /^\/v1\/review\/media\/(sg_ver_[0-9a-f]{32})$/;
 const REVIEW_ROUTES = new Map([
   ["/v1/review/case", new Set(["GET"])],
@@ -114,6 +115,9 @@ function routeFor(pathname) {
   const grantMatch = pathname.match(CASE_REVIEW_GRANT_ROUTE);
   if (grantMatch) {
     return { kind: "review_grant", methods: new Set(["POST"]) };
+  }
+  if (CASE_INGEST_RECOVERY_ROUTE.test(pathname)) {
+    return { kind: "ingest_recovery", methods: new Set(["POST"]) };
   }
   const reviewMethods = REVIEW_ROUTES.get(pathname);
   if (reviewMethods) {
@@ -527,6 +531,7 @@ function bearerToken(request) {
 function sanitizedReviewCase(record, claims) {
   const output = structuredClone(record);
   delete output.review_grants;
+  delete output.ingest_reservations;
   output.reviewer_context = {
     role: "reviewer",
     reviewer_name: claims.reviewer_name,
@@ -670,6 +675,68 @@ async function sealCase(request, env, actorId, origin) {
   const trustRoot = await assertSigningReady(env);
   const requestUrl = new URL(request.url);
   const internalPath = requestUrl.pathname.replace(/^\/v1/, "");
+  const casePath = internalPath.replace(/\/seal$/, "");
+  const current = await callCaseStore(env, actorId, casePath);
+  let currentPayload;
+  try {
+    currentPayload = await current.json();
+  } catch {
+    return jsonResponse(
+      503,
+      "case_store_unavailable",
+      "Case could not be prepared for sealing.",
+      origin,
+      env,
+    );
+  }
+  if (!current.ok || !currentPayload.case) {
+    return jsonPayloadResponse(currentPayload, current.status || 503, origin, env);
+  }
+  const reservations = Array.isArray(currentPayload.case.ingest_reservations)
+    ? currentPayload.case.ingest_reservations
+    : [];
+  if (reservations.some(item => item.status === "active")) {
+    return jsonResponse(
+      409,
+      "case_ingest_in_progress",
+      "Case media ingest is still in progress.",
+      origin,
+      env,
+    );
+  }
+  for (const reservation of reservations.filter(item => item.status === "cleanup_required")) {
+    try {
+      await deletePrivateMedia(env, {
+        actorId,
+        caseId: currentPayload.case.case_id,
+        versionId: reservation.version_id,
+      });
+    } catch {
+      return jsonResponse(
+        503,
+        "media_cleanup_unavailable",
+        "Uncommitted private media could not be cleaned before sealing.",
+        origin,
+        env,
+      );
+    }
+    const released = await settleIngestReservation(
+      env,
+      actorId,
+      currentPayload.case.case_id,
+      reservation.version_id,
+      "release",
+    );
+    if (!released.ok) {
+      return jsonResponse(
+        503,
+        "media_cleanup_unavailable",
+        "Private media cleanup could not be committed before sealing.",
+        origin,
+        env,
+      );
+    }
+  }
   const stored = await callCaseStore(env, actorId, internalPath, {
     method: "POST",
     payload: { key_id: trustRoot.key_id },
@@ -722,6 +789,75 @@ async function sealCase(request, env, actorId, origin) {
 }
 
 
+async function recoverCaseIngests(request, env, actorId, origin) {
+  const match = new URL(request.url).pathname.match(CASE_INGEST_RECOVERY_ROUTE);
+  if (!match) return jsonResponse(404, "not_found", "Route not found.", origin, env);
+  const caseId = match[1];
+  const stored = await callCaseStore(env, actorId, `/cases/${caseId}`);
+  let payload;
+  try {
+    payload = await stored.json();
+  } catch {
+    return jsonResponse(
+      503,
+      "case_store_unavailable",
+      "Case ingest recovery could not be prepared.",
+      origin,
+      env,
+    );
+  }
+  if (!stored.ok || !payload.case) {
+    return jsonPayloadResponse(payload, stored.status || 503, origin, env);
+  }
+
+  let recovered = 0;
+  for (const reservation of payload.case.ingest_reservations || []) {
+    const resolved = await resolveFailedIngest(
+      env,
+      actorId,
+      caseId,
+      reservation.version_id,
+      {
+        reserved: true,
+        outcomeUnknown: true,
+        mediaMayExist: true,
+      },
+    );
+    if (resolved.state === "pending") {
+      return jsonResponse(
+        503,
+        "ingest_recovery_unavailable",
+        "An incomplete media ingest could not be recovered.",
+        origin,
+        env,
+      );
+    }
+    if (resolved.state === "cleaned") recovered += 1;
+  }
+
+  const refreshed = await callCaseStore(env, actorId, `/cases/${caseId}`);
+  let refreshedPayload;
+  try {
+    refreshedPayload = await refreshed.json();
+  } catch {
+    return jsonResponse(
+      503,
+      "case_store_unavailable",
+      "Recovered case state could not be confirmed.",
+      origin,
+      env,
+    );
+  }
+  if (!refreshed.ok || !refreshedPayload.case) {
+    return jsonPayloadResponse(refreshedPayload, refreshed.status || 503, origin, env);
+  }
+  return jsonPayloadResponse({
+    recovered,
+    case: refreshedPayload.case,
+  }, 200, origin, env);
+}
+
+
 async function servePrivateMedia(request, env, actorId, origin) {
   const match = new URL(request.url).pathname.match(CASE_MEDIA_ROUTE);
   if (!match) {
@@ -769,7 +905,55 @@ async function servePrivateMedia(request, env, actorId, origin) {
 async function deleteCaseAndMedia(request, env, actorId, origin) {
   const requestUrl = new URL(request.url);
   const internalPath = requestUrl.pathname.replace(/^\/v1/, "");
-  const deleted = await callCaseStore(env, actorId, internalPath, { method: "DELETE" });
+  const planned = await callCaseStore(
+    env,
+    actorId,
+    `${internalPath}/delete-plan`,
+    { method: "POST", payload: {} },
+  );
+  let plan;
+  try {
+    plan = await planned.json();
+  } catch {
+    return jsonResponse(503, "case_store_unavailable", "Case could not be deleted.", origin, env);
+  }
+  if (!planned.ok) {
+    return jsonPayloadResponse(plan, planned.status || 503, origin, env);
+  }
+  if (plan.deleted === true) {
+    return jsonPayloadResponse(plan, 200, origin, env);
+  }
+  if (!plan.deletion_id || !Array.isArray(plan.media_versions)) {
+    return jsonResponse(503, "case_store_unavailable", "Case could not be deleted.", origin, env);
+  }
+  try {
+    for (const version of plan.media_versions) {
+      if (version.custody_status === "encrypted_private") {
+        await deletePrivateMedia(env, {
+          actorId,
+          caseId: plan.case_id,
+          versionId: version.version_id,
+        });
+      }
+    }
+  } catch {
+    return jsonResponse(
+      503,
+      "media_custody_unavailable",
+      "Private media could not be deleted; the frozen deletion plan can be retried.",
+      origin,
+      env,
+    );
+  }
+  const deleted = await callCaseStore(
+    env,
+    actorId,
+    `${internalPath}/delete-commit`,
+    {
+      method: "POST",
+      payload: { deletion_id: plan.deletion_id },
+    },
+  );
   let payload;
   try {
     payload = await deleted.json();
@@ -778,15 +962,6 @@ async function deleteCaseAndMedia(request, env, actorId, origin) {
   }
   if (!deleted.ok || !payload.deleted) {
     return jsonPayloadResponse(payload, deleted.status || 503, origin, env);
-  }
-  for (const version of payload.media_versions || []) {
-    if (version.custody_status === "encrypted_private") {
-      await deletePrivateMedia(env, {
-        actorId,
-        caseId: payload.case_id,
-        versionId: version.version_id,
-      });
-    }
   }
   return jsonPayloadResponse(payload, 200, origin, env);
 }
@@ -867,6 +1042,88 @@ function proxiedResponse(response, origin, env) {
 }
 
 
+async function settleIngestReservation(env, actorId, caseId, versionId, action) {
+  try {
+    const response = await callCaseStore(
+      env,
+      actorId,
+      `/cases/${caseId}/ingest-reservations/${versionId}/${action}`,
+      { method: "POST", payload: {} },
+    );
+    const payload = await response.json();
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload,
+    };
+  } catch {
+    return { ok: false, status: 503, payload: null };
+  }
+}
+
+
+async function reconcileCaseVersion(env, actorId, caseId, versionId) {
+  try {
+    const response = await callCaseStore(env, actorId, `/cases/${caseId}`);
+    if (response.status === 404) return { state: "absent" };
+    const payload = await response.json();
+    if (!response.ok || !payload.case) return { state: "unknown" };
+    if (payload.case.versions?.some(version => version.version_id === versionId)) {
+      return { state: "committed", case: payload.case };
+    }
+    return { state: "absent" };
+  } catch {
+    return { state: "unknown" };
+  }
+}
+
+
+async function resolveFailedIngest(env, actorId, caseId, versionId, options = {}) {
+  const reserved = options.reserved === true;
+  if (reserved) {
+    const prepared = await settleIngestReservation(
+      env,
+      actorId,
+      caseId,
+      versionId,
+      "abandon",
+    );
+    if (!prepared.ok) return { state: "pending" };
+    if (prepared.payload?.committed === true && prepared.payload.case) {
+      return { state: "committed", case: prepared.payload.case };
+    }
+    const cleanupPrepared = (
+      prepared.payload?.reservation?.status === "cleanup_required" ||
+      prepared.payload?.released === true
+    );
+    if (!cleanupPrepared) return { state: "pending" };
+  } else if (options.outcomeUnknown === true) {
+    const reconciled = await reconcileCaseVersion(env, actorId, caseId, versionId);
+    if (reconciled.state !== "absent") return reconciled;
+  }
+
+  if (options.mediaMayExist === true) {
+    try {
+      await deletePrivateMedia(env, { actorId, caseId, versionId });
+    } catch {
+      return { state: "pending" };
+    }
+  }
+
+  if (reserved) {
+    const released = await settleIngestReservation(
+      env,
+      actorId,
+      caseId,
+      versionId,
+      "release",
+    );
+    if (!released.ok) return { state: "pending" };
+  }
+  return { state: "cleaned" };
+}
+
+
 async function persistAnalysis(request, mediaRequest, response, env, actorId, origin, caseTitle) {
   if (!response.ok) {
     return proxiedResponse(response, origin, env);
@@ -902,8 +1159,54 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
   const caseId = requestedCaseId || randomOpaqueId("sg_case");
   const versionId = randomOpaqueId("sg_ver");
   let mediaCustody = null;
+  let ingestReserved = false;
+  let mediaWriteAttempted = false;
   if (privateMediaReady(env)) {
+    if (requestedCaseId) {
+      let reserved;
+      let reservationPayload;
+      try {
+        reserved = await callCaseStore(
+          env,
+          actorId,
+          `/cases/${caseId}/ingest-reservations`,
+          {
+            method: "POST",
+            payload: { version_id: versionId },
+          },
+        );
+        reservationPayload = await reserved.json();
+      } catch {
+        await resolveFailedIngest(env, actorId, caseId, versionId, {
+          reserved: true,
+          outcomeUnknown: true,
+          mediaMayExist: false,
+        });
+        return jsonResponse(
+          503,
+          "case_store_unavailable",
+          "Media ingest could not be reserved.",
+          origin,
+          env,
+        );
+      }
+      if (!reserved.ok || reservationPayload.reservation?.status !== "active") {
+        await resolveFailedIngest(env, actorId, caseId, versionId, {
+          reserved: true,
+          outcomeUnknown: false,
+          mediaMayExist: false,
+        });
+        return jsonPayloadResponse(
+          reservationPayload,
+          reserved.status || 503,
+          origin,
+          env,
+        );
+      }
+      ingestReserved = true;
+    }
     try {
+      mediaWriteAttempted = true;
       const media = await uploadedMedia(mediaRequest, env, fileName);
       mediaCustody = await storePrivateMedia(env, {
         actorId,
@@ -915,6 +1218,11 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
         expectedSha256: analysis.media_sha256,
       });
     } catch {
+      await resolveFailedIngest(env, actorId, caseId, versionId, {
+        reserved: ingestReserved,
+        outcomeUnknown: false,
+        mediaMayExist: mediaWriteAttempted,
+      });
       return jsonResponse(
         503,
         "media_custody_unavailable",
@@ -933,44 +1241,61 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
     );
   }
 
-  const stored = await callCaseStore(env, actorId, "/ingest", {
-    method: "POST",
-    payload: {
-      analysis,
-      case_id: requestedCaseId || null,
-      new_case_id: requestedCaseId ? null : caseId,
-      version_id: versionId,
-      version_role: versionRole,
-      title,
-      file_name: fileName,
-      media_custody: mediaCustody,
-    },
-  });
+  let stored = null;
   let storedPayload;
   try {
+    stored = await callCaseStore(env, actorId, "/ingest", {
+      method: "POST",
+      payload: {
+        analysis,
+        case_id: requestedCaseId || null,
+        new_case_id: requestedCaseId ? null : caseId,
+        version_id: versionId,
+        version_role: versionRole,
+        title,
+        file_name: fileName,
+        media_custody: mediaCustody,
+        reservation_id: ingestReserved ? versionId : null,
+      },
+    });
     storedPayload = await stored.json();
   } catch {
-    return jsonResponse(
-      503,
-      "case_store_unavailable",
-      "Analysis could not be persisted.",
-      origin,
-      env,
-    );
-  }
-  if (!stored.ok || !storedPayload.case) {
-    if (mediaCustody) {
-      await deletePrivateMedia(env, { actorId, caseId, versionId });
+    const resolved = await resolveFailedIngest(env, actorId, caseId, versionId, {
+      reserved: ingestReserved,
+      outcomeUnknown: true,
+      mediaMayExist: Boolean(mediaCustody) || mediaWriteAttempted,
+    });
+    if (resolved.state === "committed") {
+      storedPayload = { case: resolved.case };
+    } else {
+      return jsonResponse(
+        503,
+        "case_store_unavailable",
+        "Analysis persistence outcome could not be confirmed.",
+        origin,
+        env,
+      );
     }
-    return jsonPayloadResponse(
-      storedPayload,
-      stored.status || 503,
-      origin,
-      env,
-    );
+  }
+  if (stored && (!stored.ok || !storedPayload.case)) {
+    const resolved = await resolveFailedIngest(env, actorId, caseId, versionId, {
+      reserved: ingestReserved,
+      outcomeUnknown: false,
+      mediaMayExist: Boolean(mediaCustody) || mediaWriteAttempted,
+    });
+    if (resolved.state === "committed") {
+      storedPayload = { case: resolved.case };
+    } else {
+      return jsonPayloadResponse(
+        storedPayload,
+        stored.status || 503,
+        origin,
+        env,
+      );
+    }
   }
   const record = storedPayload.case;
-  const version = record.versions?.at(-1);
+  const version = record.versions?.find(item => item.version_id === versionId);
   if (!version?.version_id || !record.case_id) {
     return jsonResponse(
       503,
@@ -1059,6 +1384,9 @@ export async function handleRequest(request, env, fetchImpl = fetch) {
     }
     if (route.kind === "review_grant") {
       return await manageReviewGrant(request, env, actorId, origin);
+    }
+    if (route.kind === "ingest_recovery") {
+      return await recoverCaseIngests(request, env, actorId, origin);
     }
     if (route.kind === "case_store") {
       if (requestUrl.pathname.endsWith("/seal")) {

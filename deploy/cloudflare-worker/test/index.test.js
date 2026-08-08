@@ -5,6 +5,7 @@ import test from "node:test";
 import { consumeQuotaState, handleRequest } from "../src/index.js";
 import { applyCaseCommand, createCase, ShareGuardCaseStore } from "../src/case-store.js";
 import { publicTrustRoot, verifyEvidencePackage } from "../src/evidence.js";
+import { mediaObjectKey } from "../src/media-store.js";
 
 
 function allowAllLimiter() {
@@ -57,10 +58,10 @@ function persistentCaseStore() {
             if (url.pathname === "/ingest") {
               return new Response(JSON.stringify({
                 case: {
-                  case_id: caseId,
+                  case_id: payload.new_case_id || payload.case_id || caseId,
                   status: "open",
                   chain_head: "c".repeat(64),
-                  versions: [{ version_id: versionId }],
+                  versions: [{ version_id: payload.version_id || versionId }],
                 },
               }), { status: 201 });
             }
@@ -82,7 +83,45 @@ function persistentCaseStore() {
 
 function mediaAwareCaseStore() {
   let record = null;
+  let tombstone = null;
+  let deleteCalls = 0;
+  let reservationCalls = 0;
+  let abandonCalls = 0;
+  let failCommit = false;
+  let failIngest = false;
+  let failRelease = false;
+  let corruptCommittedResponse = false;
+  let corruptReservationResponse = false;
+  const reservations = new Map();
+  const deletionId = `sg_delete_${"d".repeat(32)}`;
   return {
+    get deleteCalls() {
+      return deleteCalls;
+    },
+    get reservationCalls() {
+      return reservationCalls;
+    },
+    get abandonCalls() {
+      return abandonCalls;
+    },
+    get reservationCount() {
+      return reservations.size;
+    },
+    setCommitFailure(value) {
+      failCommit = Boolean(value);
+    },
+    setIngestFailure(value) {
+      failIngest = Boolean(value);
+    },
+    setReleaseFailure(value) {
+      failRelease = Boolean(value);
+    },
+    setCorruptCommittedResponse(value) {
+      corruptCommittedResponse = Boolean(value);
+    },
+    setCorruptReservationResponse(value) {
+      corruptReservationResponse = Boolean(value);
+    },
     binding: {
       idFromName: key => key,
       get: () => ({
@@ -91,30 +130,143 @@ function mediaAwareCaseStore() {
           const url = new URL(request.url);
           if (request.method === "POST" && url.pathname === "/ingest") {
             const payload = await request.json();
-            record = {
-              case_id: payload.new_case_id,
-              status: "awaiting_review",
-              chain_head: "c".repeat(64),
-              versions: [{
+            const version = {
                 version_id: payload.version_id,
                 media_sha256: payload.analysis.media_sha256,
                 media_custody: payload.media_custody,
-              }],
             };
+            if (payload.case_id) {
+              assert.equal(payload.reservation_id, payload.version_id);
+              assert.equal(reservations.get(payload.version_id), "active");
+              if (failIngest) {
+                return new Response(JSON.stringify({
+                  error: { code: "case_store_unavailable", message: "simulated ingest failure" },
+                }), { status: 503 });
+              }
+              reservations.delete(payload.version_id);
+              record.versions.push(version);
+              if (corruptCommittedResponse) {
+                return new Response("{", {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                });
+              }
+            } else {
+              record = {
+                case_id: payload.new_case_id,
+                status: "awaiting_review",
+                chain_head: "c".repeat(64),
+                versions: [version],
+              };
+              if (corruptCommittedResponse) {
+                return new Response("{", {
+                  status: 201,
+                  headers: { "Content-Type": "application/json" },
+                });
+              }
+            }
             return new Response(JSON.stringify({ case: record }), { status: 201 });
           }
           if (request.method === "GET" && url.pathname === `/cases/${record?.case_id}`) {
             return new Response(JSON.stringify({ case: record }));
           }
-          if (request.method === "DELETE" && url.pathname === `/cases/${record?.case_id}`) {
+          if (
+            request.method === "POST" &&
+            url.pathname === `/cases/${record?.case_id}/ingest-reservations`
+          ) {
+            const payload = await request.json();
+            reservationCalls += 1;
+            reservations.set(payload.version_id, "active");
+            if (corruptReservationResponse) {
+              return new Response("{", {
+                status: 201,
+                headers: { "Content-Type": "application/json" },
+              });
+            }
             return new Response(JSON.stringify({
-              deleted: true,
+              reservation: { version_id: payload.version_id, status: "active" },
+            }), { status: 201 });
+          }
+          const reservationMatch = url.pathname.match(
+            new RegExp(`^/cases/${record?.case_id}/ingest-reservations/(sg_ver_[0-9a-f]{32})/(release|abandon)$`),
+          );
+          if (request.method === "POST" && reservationMatch) {
+            const committedVersion = record?.versions?.find(
+              version => version.version_id === reservationMatch[1],
+            );
+            if (committedVersion) {
+              return new Response(JSON.stringify({
+                committed: true,
+                version_id: reservationMatch[1],
+                case: record,
+              }));
+            }
+            if (reservationMatch[2] === "abandon") {
+              abandonCalls += 1;
+              reservations.set(reservationMatch[1], "cleanup_required");
+              return new Response(JSON.stringify({
+                reservation: { version_id: reservationMatch[1], status: "cleanup_required" },
+              }));
+            }
+            if (failRelease) {
+              return new Response(JSON.stringify({
+                error: { code: "case_store_unavailable", message: "simulated release failure" },
+              }), { status: 503 });
+            }
+            reservations.delete(reservationMatch[1]);
+            return new Response(JSON.stringify({ released: true, version_id: reservationMatch[1] }));
+          }
+          if (request.method === "POST" && url.pathname === `/cases/${record?.case_id}/delete-plan`) {
+            if ([...reservations.values()].some(status => status === "active")) {
+              return new Response(JSON.stringify({
+                error: { code: "case_ingest_in_progress", message: "simulated active ingest" },
+              }), { status: 409 });
+            }
+            record.deletion ||= {
+              status: "pending",
+              deletion_id: deletionId,
+            };
+            return new Response(JSON.stringify({
+              deletion_id: record.deletion.deletion_id,
               case_id: record.case_id,
-              media_versions: record.versions.map(version => ({
-                version_id: version.version_id,
-                custody_status: version.media_custody.status,
-              })),
+              media_versions: [
+                ...record.versions.map(version => ({
+                  version_id: version.version_id,
+                  custody_status: version.media_custody.status,
+                })),
+                ...[...reservations]
+                  .filter(([, status]) => status === "cleanup_required")
+                  .map(([versionId]) => ({
+                    version_id: versionId,
+                    custody_status: "encrypted_private",
+                  })),
+              ],
             }));
+          }
+          if (
+            request.method === "POST" &&
+            tombstone &&
+            url.pathname === `/cases/${tombstone.case_id}/delete-plan`
+          ) {
+            return new Response(JSON.stringify(tombstone));
+          }
+          if (request.method === "POST" && url.pathname === `/cases/${record?.case_id}/delete-commit`) {
+            const payload = await request.json();
+            if (failCommit) {
+              return new Response(JSON.stringify({
+                error: { code: "case_store_unavailable", message: "simulated commit failure" },
+              }), { status: 503 });
+            }
+            assert.equal(payload.deletion_id, deletionId);
+            deleteCalls += 1;
+            const deletedRecord = record;
+            tombstone = {
+              deleted: true,
+              case_id: deletedRecord.case_id,
+              deletion_id: deletionId,
+            };
+            record = null;
+            return new Response(JSON.stringify(tombstone));
           }
           return new Response(JSON.stringify({ error: { code: "not_found" } }), { status: 404 });
         },
@@ -126,8 +278,12 @@ function mediaAwareCaseStore() {
 
 function memoryMediaBucket() {
   const objects = new Map();
+  let failDelete = false;
   return {
     objects,
+    setDeleteFailure(value) {
+      failDelete = Boolean(value);
+    },
     async put(key, value, options = {}) {
       objects.set(key, {
         bytes: new Uint8Array(await new Response(value).arrayBuffer()),
@@ -139,6 +295,7 @@ function memoryMediaBucket() {
       return object ? { body: object.bytes, customMetadata: object.customMetadata } : null;
     },
     async delete(key) {
+      if (failDelete) throw new Error("simulated R2 delete failure");
       objects.delete(key);
     },
   };
@@ -388,6 +545,7 @@ test("production analysis stores encrypted media and serves it only through the 
     MEDIA_ENCRYPTION_KEY_VERSION: "media-test",
     MEDIA_RETENTION_DAYS: "7",
   };
+  store.setCorruptCommittedResponse(true);
   const analyzeResponse = await handleRequest(
     new Request("https://api.shareguard.systems/v1/analyze", {
       method: "POST",
@@ -416,6 +574,7 @@ test("production analysis stores encrypted media and serves it only through the 
       report: { report_id: "SG-MEDIA" },
     }), { headers: { "Content-Type": "application/json" } }),
   );
+  store.setCorruptCommittedResponse(false);
 
   assert.equal(analyzeResponse.status, 200);
   const analyzed = await analyzeResponse.json();
@@ -437,6 +596,204 @@ test("production analysis stores encrypted media and serves it only through the 
   assert.equal(mediaResponse.headers.get("X-ShareGuard-Media-SHA256"), digest);
   assert.deepEqual(new Uint8Array(await mediaResponse.arrayBuffer()), bytes);
 
+  store.setCorruptReservationResponse(true);
+  const reservationLossForm = new FormData();
+  reservationLossForm.append(
+    "image",
+    new Blob([new Uint8Array([2, 4, 6, 8])], { type: "image/jpeg" }),
+    "reservation-loss.jpg",
+  );
+  const reservationLossResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+        "X-File-Name": "reservation-loss.jpg",
+        "X-ShareGuard-Case-Id": analyzed.case_id,
+        "X-ShareGuard-Version-Role": "observed_variant",
+      },
+      body: reservationLossForm,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_reservation_loss",
+      media_sha256: createHash("sha256").update(new Uint8Array([2, 4, 6, 8])).digest("hex"),
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "needs_review",
+      risk_level: "medium",
+      model_score: 0.57,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.14,
+      latency_ms: 225,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-RESERVATION-LOSS" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+  store.setCorruptReservationResponse(false);
+  assert.equal(reservationLossResponse.status, 503);
+  assert.equal(store.reservationCount, 0);
+  assert.equal(bucket.objects.size, 1);
+
+  const observedBytes = new Uint8Array([9, 8, 7, 6]);
+  const observedDigest = createHash("sha256").update(observedBytes).digest("hex");
+  const observedForm = new FormData();
+  observedForm.append("image", new Blob([observedBytes], { type: "image/jpeg" }), "observed.jpg");
+  const observedResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+        "X-File-Name": "observed.jpg",
+        "X-ShareGuard-Case-Id": analyzed.case_id,
+        "X-ShareGuard-Version-Role": "observed_variant",
+      },
+      body: observedForm,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_observed",
+      media_sha256: observedDigest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "needs_review",
+      risk_level: "medium",
+      model_score: 0.6,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.2,
+      latency_ms: 240,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-OBSERVED" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+  assert.equal(observedResponse.status, 200);
+  assert.equal(store.reservationCalls, 2);
+  assert.equal((await observedResponse.json()).case.versions.length, 2);
+  assert.equal(bucket.objects.size, 2);
+
+  store.setCorruptCommittedResponse(true);
+  const recoveredBytes = new Uint8Array([1, 3, 5, 7, 9]);
+  const recoveredDigest = createHash("sha256").update(recoveredBytes).digest("hex");
+  const recoveredForm = new FormData();
+  recoveredForm.append("image", new Blob([recoveredBytes], { type: "image/jpeg" }), "recovered.jpg");
+  const recoveredResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+        "X-File-Name": "recovered.jpg",
+        "X-ShareGuard-Case-Id": analyzed.case_id,
+        "X-ShareGuard-Version-Role": "observed_variant",
+      },
+      body: recoveredForm,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_recovered_ingest",
+      media_sha256: recoveredDigest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "needs_review",
+      risk_level: "medium",
+      model_score: 0.58,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.16,
+      latency_ms: 230,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-RECOVERED-INGEST" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+  store.setCorruptCommittedResponse(false);
+  assert.equal(recoveredResponse.status, 200);
+  assert.equal((await recoveredResponse.json()).case.versions.length, 3);
+  assert.equal(bucket.objects.size, 3);
+
+  store.setIngestFailure(true);
+  store.setReleaseFailure(true);
+  const failedBytes = new Uint8Array([5, 4, 3, 2, 1]);
+  const failedDigest = createHash("sha256").update(failedBytes).digest("hex");
+  const failedForm = new FormData();
+  failedForm.append("image", new Blob([failedBytes], { type: "image/jpeg" }), "failed.jpg");
+  const failedIngestResponse = await handleRequest(
+    new Request("https://api.shareguard.systems/v1/analyze", {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+        "X-File-Name": "failed.jpg",
+        "X-ShareGuard-Case-Id": analyzed.case_id,
+        "X-ShareGuard-Version-Role": "observed_variant",
+      },
+      body: failedForm,
+    }),
+    runtime,
+    async () => new Response(JSON.stringify({
+      request_id: "sg_req_failed_ingest",
+      media_sha256: failedDigest,
+      engine_release: "shareguard-screening-2026.08",
+      detector_engine: "shareguard-protected-screening-engine",
+      decision_layer: "shareguard-editorial-policy-v2",
+      machine_recommendation: "review",
+      decision_label: "needs_review",
+      risk_level: "medium",
+      model_score: 0.55,
+      score_kind: "uncalibrated_ai_generation_score",
+      decision_margin: 0.1,
+      latency_ms: 220,
+      image: { width: 10, height: 10, format: "JPEG" },
+      report: { report_id: "SG-FAILED-INGEST" },
+    }), { headers: { "Content-Type": "application/json" } }),
+  );
+  assert.equal(failedIngestResponse.status, 503);
+  assert.equal(store.reservationCalls, 4);
+  assert.equal(store.abandonCalls, 2);
+  assert.equal(bucket.objects.size, 3);
+  store.setIngestFailure(false);
+  store.setReleaseFailure(false);
+  bucket.setDeleteFailure(true);
+
+  const failedDeleteResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${analyzed.case_id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+      },
+    }),
+    runtime,
+  );
+  assert.equal(failedDeleteResponse.status, 503);
+  assert.equal((await failedDeleteResponse.json()).error.code, "media_custody_unavailable");
+  assert.equal(store.deleteCalls, 0);
+  assert.equal(bucket.objects.size, 3);
+  bucket.setDeleteFailure(false);
+
+  store.setCommitFailure(true);
+  const failedCommitResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${analyzed.case_id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+      },
+    }),
+    runtime,
+  );
+  assert.equal(failedCommitResponse.status, 503);
+  assert.equal((await failedCommitResponse.json()).error.code, "case_store_unavailable");
+  assert.equal(store.deleteCalls, 0);
+  assert.equal(bucket.objects.size, 0);
+  store.setCommitFailure(false);
+
   const deleteResponse = await handleRequest(
     new Request(`https://api.shareguard.systems/v1/cases/${analyzed.case_id}`, {
       method: "DELETE",
@@ -448,7 +805,22 @@ test("production analysis stores encrypted media and serves it only through the 
     runtime,
   );
   assert.equal(deleteResponse.status, 200);
+  assert.equal(store.deleteCalls, 1);
   assert.equal(bucket.objects.size, 0);
+
+  const idempotentDeleteResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${analyzed.case_id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.91",
+      },
+    }),
+    runtime,
+  );
+  assert.equal(idempotentDeleteResponse.status, 200);
+  assert.equal((await idempotentDeleteResponse.json()).deleted, true);
+  assert.equal(store.deleteCalls, 1);
 });
 
 
@@ -510,6 +882,7 @@ test("case-scoped reviewer links permit comments but not owner routes and revoke
   const reviewCase = await reviewCaseResponse.json();
   assert.equal(reviewCase.case.case_id, record.case_id);
   assert.equal(reviewCase.case.review_grants, undefined);
+  assert.equal(reviewCase.case.ingest_reservations, undefined);
   assert.equal(reviewCase.case.reviewer_context.role, "reviewer");
 
   const commentResponse = await handleRequest(
@@ -649,7 +1022,160 @@ test("trust root and sealing are served without waking Modal", async () => {
     true,
   );
   assert.equal(upstreamCalled, false);
-  assert.deepEqual(store.calls, [`/cases/${record.case_id}/seal`]);
+  assert.deepEqual(store.calls, [
+    `/cases/${record.case_id}`,
+    `/cases/${record.case_id}/seal`,
+  ]);
+});
+
+
+test("sealing cleans failed private-media ingests before committing the evidence package", async () => {
+  const signing = await signingEnvironment();
+  const ownerId = `sg_actor_${createHmac("sha256", EDGE_SHARED_SECRET)
+    .update("shareguard-actor:test")
+    .digest("hex")
+    .slice(0, 32)}`;
+  const created = await createCase({
+    request_id: "sg_req_seal_cleanup",
+    media_sha256: "7".repeat(64),
+    engine_release: "shareguard-screening-2026.08",
+    detector_engine: "shareguard-protected-screening-engine",
+    decision_layer: "shareguard-editorial-policy-v2",
+    machine_recommendation: "review",
+    decision_label: "review",
+    risk_level: "high",
+    model_score: 0.82,
+    score_kind: "uncalibrated_ai_generation_score",
+    decision_margin: 0.64,
+    latency_ms: 410,
+    image: { width: 1200, height: 800, format: "JPEG" },
+    report: { report_id: "SG-SEAL-CLEANUP" },
+  }, {
+    caseId: `sg_case_${"6".repeat(32)}`,
+    versionId: `sg_ver_${"5".repeat(32)}`,
+    actorId: ownerId,
+    now: "2026-08-08T05:00:00.000Z",
+  });
+  const record = await applyCaseCommand(created, {
+    type: "decision",
+    payload: { action: "hold", reason_code: "source_unverified" },
+  }, { actorId: ownerId, now: "2026-08-08T05:01:00.000Z" });
+  const failedVersionId = `sg_ver_${"4".repeat(32)}`;
+  record.ingest_reservations.push({
+    version_id: failedVersionId,
+    status: "cleanup_required",
+    reserved_at: "2026-08-08T05:02:00.000Z",
+    updated_at: "2026-08-08T05:03:00.000Z",
+  });
+  const bucket = memoryMediaBucket();
+  const orphanKey = mediaObjectKey(ownerId, record.case_id, failedVersionId);
+  await bucket.put(orphanKey, new TextEncoder().encode("failed encrypted ingest"));
+  const store = realCaseStoreBinding(ownerId, record);
+  const runtime = {
+    ...env,
+    ...signing,
+    CASE_STORE: store.binding,
+    MEDIA_BUCKET: bucket,
+  };
+
+  bucket.setDeleteFailure(true);
+  const failedResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${record.case_id}/seal`, {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.72",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    }),
+    runtime,
+  );
+  assert.equal(failedResponse.status, 503);
+  assert.equal((await failedResponse.json()).error.code, "media_cleanup_unavailable");
+  assert.equal(bucket.objects.has(orphanKey), true);
+  bucket.setDeleteFailure(false);
+
+  const response = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${record.case_id}/seal`, {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.72",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    }),
+    runtime,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(bucket.objects.has(orphanKey), false);
+  const evidencePackage = await response.json();
+  assert.equal(
+    (await verifyEvidencePackage(evidencePackage, [publicTrustRoot(runtime)])).valid,
+    true,
+  );
+});
+
+
+test("an owner can recover an orphaned active ingest reservation without database access", async () => {
+  const ownerId = `sg_actor_${createHmac("sha256", EDGE_SHARED_SECRET)
+    .update("shareguard-actor:test")
+    .digest("hex")
+    .slice(0, 32)}`;
+  const record = await createCase({
+    request_id: "sg_req_ingest_recovery",
+    media_sha256: "6".repeat(64),
+    engine_release: "shareguard-screening-2026.08",
+    detector_engine: "shareguard-protected-screening-engine",
+    decision_layer: "shareguard-editorial-policy-v2",
+    machine_recommendation: "review",
+    decision_label: "review",
+    risk_level: "medium",
+    model_score: 0.61,
+    score_kind: "uncalibrated_ai_generation_score",
+    decision_margin: 0.22,
+    latency_ms: 280,
+    image: { width: 900, height: 600, format: "JPEG" },
+    report: { report_id: "SG-INGEST-RECOVERY" },
+  }, {
+    caseId: `sg_case_${"3".repeat(32)}`,
+    versionId: `sg_ver_${"2".repeat(32)}`,
+    actorId: ownerId,
+    now: "2026-08-08T06:00:00.000Z",
+  });
+  const orphanVersionId = `sg_ver_${"1".repeat(32)}`;
+  record.ingest_reservations.push({
+    version_id: orphanVersionId,
+    status: "active",
+    reserved_at: "2026-08-08T06:01:00.000Z",
+    updated_at: "2026-08-08T06:01:00.000Z",
+  });
+  const bucket = memoryMediaBucket();
+  const orphanKey = mediaObjectKey(ownerId, record.case_id, orphanVersionId);
+  await bucket.put(orphanKey, new TextEncoder().encode("ambiguous upload"));
+  const store = realCaseStoreBinding(ownerId, record);
+  const runtime = { ...env, CASE_STORE: store.binding, MEDIA_BUCKET: bucket };
+
+  const response = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${record.case_id}/ingest-recovery`, {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.73",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    }),
+    runtime,
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.recovered, 1);
+  assert.deepEqual(payload.case.ingest_reservations, []);
+  assert.equal(bucket.objects.has(orphanKey), false);
 });
 
 

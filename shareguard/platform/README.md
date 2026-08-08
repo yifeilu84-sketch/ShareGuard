@@ -46,6 +46,7 @@ ShareGuard 将图像级筛查信号接入真实的媒体发布与证据复核流
 - `POST /v1/cases/{case_id}/provenance`
 - `POST /v1/cases/{case_id}/annotations`
 - `POST /v1/cases/{case_id}/comments`
+- `POST /v1/cases/{case_id}/ingest-recovery`
 - `GET /v1/cases/{case_id}/versions/{version_id}/media`
 
 协作与证据：
@@ -67,9 +68,18 @@ Cloudflare Worker 生产配置必须提供：
 
 - `MEDIA_BUCKET`：私有 R2 binding；
 - `MEDIA_ENCRYPTION_KEY_B64`：32 字节随机媒体加密密钥，Cloudflare Secret；
+- `MEDIA_DECRYPTION_KEYS_JSON`：仅在轮换后仍有旧密文时配置的历史解密 keyring，Cloudflare Secret；
 - `REVIEW_TOKEN_SECRET`：审查链接 HMAC 密钥，Cloudflare Secret；
 - `SGD_SIGNING_PRIVATE_JWK`：证据包签名私钥，Cloudflare Secret；
 - `MEDIA_CUSTODY_REQUIRED=true`：媒体无法加密持久化时，分析请求失败关闭。
+
+未签封案件采用可重试的两阶段删除：先冻结案件并写入哈希链接的删除计划，再清理对应 R2 密文，最后以同一删除 ID 提交元数据删除。任何清理或提交失败都不会恢复案件写入权限；界面会显示 `DELETE PENDING`，用户只能重试安全删除。成功后仅保留不含媒体和业务内容的最小幂等墓碑。
+
+向既有案件追加媒体时，系统会先在 Durable Object 创建不透明上传预留，再写入 R2。案件提交成功会原子消费该预留；若案件提交和即时清理均失败，预留会转为 `cleanup_required` 并持续追踪对应密文。活动预留期间禁止签封和删除；签封前会先清理失败上传并再次由状态机核对，避免并发产生未纳入证据链的孤立对象。
+
+清理顺序固定为“先标记待清理，再删除 R2，最后释放预留”。若案件已经提交但成功响应丢失，状态机会返回已提交版本，Worker 会恢复成功结果并保留其媒体；若最后释放失败，`cleanup_required` 仍会留在删除计划中，不会形成永久阻塞或无引用密文。
+
+若连预留撤销响应也丢失，案件所有者可调用 `POST /v1/cases/{case_id}/ingest-recovery`。该路由会重新核对版本是否已提交，只删除确认未提交的媒体并返回刷新后的案件；受限审查链接无权调用。
 
 这些值不得写入 Git、`wrangler.toml`、前端运行时配置或构建日志。R2 对象不公开；删除未签封案件时，同时删除对应密文对象。历史摘要-only案件仍可打开元数据与审计链，也可重新关联 SHA-256 匹配的本地原件。
 
