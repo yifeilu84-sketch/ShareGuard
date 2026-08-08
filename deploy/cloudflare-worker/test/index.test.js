@@ -53,7 +53,7 @@ function persistentCaseStore() {
             if (request.method === "POST") {
               payload = await request.json();
             }
-            calls.push({ method: request.method, path: url.pathname, payload });
+            calls.push({ method: request.method, path: url.pathname + url.search, payload });
             if (url.pathname === "/ingest") {
               return new Response(JSON.stringify({
                 case: {
@@ -505,6 +505,45 @@ test("case reads use persistent storage and never call Modal", async () => {
   const payload = await response.json();
   assert.equal(payload.cases.length, 1);
   assert.equal(defaultCaseStore.calls.at(-1).path, "/cases");
+});
+
+
+test("case queue filters and workflow commands reach the persistent control plane", async () => {
+  const store = persistentCaseStore();
+  const caseId = `sg_case_${"a".repeat(32)}`;
+  const listResponse = await handleRequest(
+    new Request(
+      "https://api.shareguard.systems/v1/cases?status=awaiting_review&priority=urgent&limit=10",
+      {
+        headers: {
+          Authorization: AUTHORIZATION,
+          "CF-Connecting-IP": "203.0.113.81",
+        },
+      },
+    ),
+    { ...env, CASE_STORE: store.binding },
+  );
+  const workflowResponse = await handleRequest(
+    new Request(`https://api.shareguard.systems/v1/cases/${caseId}/workflow`, {
+      method: "POST",
+      headers: {
+        Authorization: AUTHORIZATION,
+        "CF-Connecting-IP": "203.0.113.81",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ priority: "urgent", assignee: "Night editor" }),
+    }),
+    { ...env, CASE_STORE: store.binding },
+  );
+
+  assert.equal(listResponse.status, 200);
+  assert.equal(workflowResponse.status, 200);
+  assert.equal(
+    store.calls[0].path,
+    "/cases?status=awaiting_review&priority=urgent&limit=10",
+  );
+  assert.equal(store.calls[1].path, `/cases/${caseId}/workflow`);
+  assert.equal(store.calls[1].payload.priority, "urgent");
 });
 
 

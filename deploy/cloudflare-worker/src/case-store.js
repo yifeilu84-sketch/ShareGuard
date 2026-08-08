@@ -19,6 +19,20 @@ const FEEDBACK_OUTCOMES = new Set([
   "confirmed_generated",
   "unresolved",
 ]);
+const WORKFLOW_PRIORITIES = new Set(["urgent", "high", "normal", "low"]);
+const PROVENANCE_RELATIONSHIPS = new Set([
+  "original_source",
+  "observed_from",
+  "received_from",
+  "reposted_from",
+]);
+const CLOSED_STATUSES = new Set(["closed_allowed", "sealed"]);
+const SLA_MINUTES = {
+  urgent: 15,
+  high: 60,
+  normal: 240,
+  low: 1440,
+};
 
 
 class CaseStoreError extends Error {
@@ -68,6 +82,117 @@ function currentTimestamp(value) {
 
 function randomId(prefix) {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+
+function priorityFromRisk(riskLevel) {
+  const normalized = String(riskLevel || "").toLowerCase();
+  if (new Set(["critical", "severe"]).has(normalized)) {
+    return "urgent";
+  }
+  if (normalized === "high") {
+    return "high";
+  }
+  if (normalized === "low") {
+    return "low";
+  }
+  return "normal";
+}
+
+
+function slaDueAt(timestamp, priority) {
+  const due = new Date(timestamp);
+  due.setUTCMinutes(due.getUTCMinutes() + SLA_MINUTES[priority]);
+  return due.toISOString();
+}
+
+
+function workflowTask(type, timestamp, actorId, { title = "", dueAt = "" } = {}) {
+  return {
+    task_id: randomId("sg_task"),
+    type,
+    title: title || type.replaceAll("_", " "),
+    status: "open",
+    created_at: timestamp,
+    created_by: actorId,
+    due_at: dueAt || null,
+    completed_at: null,
+    completed_by: null,
+  };
+}
+
+
+function mediaGraphNode(version) {
+  return {
+    node_id: `media:${version.version_id}`,
+    kind: "media_version",
+    version_id: version.version_id,
+    role: version.role,
+    file_name: version.file_name,
+    media_sha256: version.media_sha256,
+    received_at: version.received_at,
+  };
+}
+
+
+function initialWorkflow(version, timestamp, actorId) {
+  const priority = priorityFromRisk(version.risk_level);
+  const dueAt = slaDueAt(timestamp, priority);
+  return {
+    priority,
+    assignee: "",
+    sla_due_at: dueAt,
+    tasks: [workflowTask("review_media", timestamp, actorId, {
+      title: "Review analyzed media",
+      dueAt,
+    })],
+  };
+}
+
+
+function legacyStatus(record) {
+  if (record.status === "sealed") {
+    return "sealed";
+  }
+  const action = record.human_decision?.action;
+  return {
+    allow: "closed_allowed",
+    request_original: "awaiting_source",
+    escalate: "escalated",
+    hold: "held",
+  }[action] || "awaiting_review";
+}
+
+
+export function migrateCaseRecord(record) {
+  if (!record || typeof record !== "object") {
+    return record;
+  }
+  const next = clone(record);
+  const firstVersion = next.versions?.[0] || {};
+  const fallbackActor = next.events?.[0]?.actor_id || `sg_actor_${"0".repeat(32)}`;
+  const createdAt = next.created_at || new Date(0).toISOString();
+  next.schema = "shareguard.case.v3";
+  next.status = legacyStatus(next);
+  if (!next.workflow || typeof next.workflow !== "object") {
+    next.workflow = initialWorkflow(firstVersion, createdAt, fallbackActor);
+    if (CLOSED_STATUSES.has(next.status)) {
+      for (const task of next.workflow.tasks) {
+        task.status = "completed";
+        task.completed_at = next.updated_at || createdAt;
+        task.completed_by = next.human_decision?.actor_id || fallbackActor;
+      }
+    }
+  }
+  next.comments = Array.isArray(next.comments) ? next.comments : [];
+  next.review_grants = Array.isArray(next.review_grants) ? next.review_grants : [];
+  if (!next.provenance_graph || typeof next.provenance_graph !== "object") {
+    next.provenance_graph = {
+      nodes: (next.versions || []).map(mediaGraphNode),
+      edges: [],
+    };
+  }
+  return next;
 }
 
 
@@ -318,10 +443,10 @@ export async function createCase(analysis, context = {}) {
   );
   const version = versionFromAnalysis(analysis, context, timestamp);
   const record = {
-    schema: "shareguard.case.v2",
+    schema: "shareguard.case.v3",
     case_id: caseId,
     title: boundedText(context.title || version.file_name, "title", 160, { required: true }),
-    status: "open",
+    status: "awaiting_review",
     created_at: timestamp,
     updated_at: timestamp,
     sealed_at: null,
@@ -330,6 +455,13 @@ export async function createCase(analysis, context = {}) {
     annotations: {},
     human_decision: null,
     feedback: null,
+    workflow: initialWorkflow(version, timestamp, actorId),
+    comments: [],
+    review_grants: [],
+    provenance_graph: {
+      nodes: [mediaGraphNode(version)],
+      edges: [],
+    },
     events: [],
     chain_head: ZERO_HASH,
   };
@@ -348,7 +480,7 @@ export async function createCase(analysis, context = {}) {
 }
 
 
-function normalizeAnnotation(annotation, index) {
+function normalizeAnnotation(annotation, index, actorId, timestamp) {
   if (!annotation || typeof annotation !== "object") {
     throw new CaseStoreError(400, "invalid_field", "annotation is invalid.");
   }
@@ -372,7 +504,40 @@ function normalizeAnnotation(annotation, index) {
     height,
     note: boundedText(annotation.note, "annotation.note", 500),
     origin: "human_reviewer",
+    actor_id: actorId,
+    recorded_at: timestamp,
   };
+}
+
+
+function completeOpenTasks(workflow, timestamp, actorId) {
+  for (const task of workflow.tasks || []) {
+    if (task.status === "open") {
+      task.status = "completed";
+      task.completed_at = timestamp;
+      task.completed_by = actorId;
+    }
+  }
+}
+
+
+function addActionTask(workflow, action, timestamp, actorId) {
+  const taskType = {
+    request_original: "source_acquisition",
+    escalate: "senior_review",
+    hold: "hold_resolution",
+  }[action];
+  if (!taskType) {
+    return;
+  }
+  workflow.tasks.push(workflowTask(taskType, timestamp, actorId, {
+    title: {
+      source_acquisition: "Obtain and verify the original media",
+      senior_review: "Complete senior editorial review",
+      hold_resolution: "Resolve publication hold",
+    }[taskType],
+    dueAt: workflow.sla_due_at,
+  }));
 }
 
 
@@ -380,21 +545,22 @@ export async function applyCaseCommand(record, command, context = {}) {
   if (!record || typeof record !== "object") {
     throw new CaseStoreError(404, "case_not_found", "Case not found.");
   }
-  if (!await verifyEventChain(record.events)) {
+  const migrated = migrateCaseRecord(record);
+  if (!await verifyEventChain(migrated.events)) {
     throw new CaseStoreError(409, "invalid_event_chain", "Case event chain is invalid.");
   }
   const type = String(command?.type || "");
   const payload = command?.payload || {};
-  if (record.status === "sealed") {
-    const activeKeyId = record.events?.at(-1)?.payload?.key_id;
+  if (migrated.status === "sealed") {
+    const activeKeyId = migrated.events?.at(-1)?.payload?.key_id;
     if (type === "seal" && payload.key_id === activeKeyId) {
-      return clone(record);
+      return clone(migrated);
     }
     throw new CaseStoreError(409, "case_sealed", "Case is sealed and cannot be changed.");
   }
   const actorId = requiredId(context.actorId, ACTOR_ID_PATTERN, "actor_id");
   const timestamp = currentTimestamp(context.now);
-  const next = clone(record);
+  const next = clone(migrated);
 
   if (type === "add_version") {
     const version = versionFromAnalysis(payload.analysis, {
@@ -410,6 +576,13 @@ export async function applyCaseCommand(record, command, context = {}) {
       );
     }
     next.versions.push(version);
+    next.provenance_graph.nodes.push(mediaGraphNode(version));
+    next.human_decision = null;
+    next.status = "awaiting_review";
+    next.workflow.tasks.push(workflowTask("review_media", timestamp, actorId, {
+      title: "Review newly added media version",
+      dueAt: next.workflow.sla_due_at,
+    }));
     await appendEvent(
       next,
       "version_analyzed",
@@ -442,6 +615,14 @@ export async function applyCaseCommand(record, command, context = {}) {
       actor_id: actorId,
       recorded_at: timestamp,
     };
+    completeOpenTasks(next.workflow, timestamp, actorId);
+    next.status = {
+      allow: "closed_allowed",
+      request_original: "awaiting_source",
+      escalate: "escalated",
+      hold: "held",
+    }[action];
+    addActionTask(next.workflow, action, timestamp, actorId);
     await appendEvent(next, "human_decision_recorded", next.human_decision, actorId, timestamp);
     return next;
   }
@@ -454,7 +635,9 @@ export async function applyCaseCommand(record, command, context = {}) {
     if (!Array.isArray(payload.annotations) || payload.annotations.length > 50) {
       throw new CaseStoreError(400, "invalid_field", "annotations must contain at most 50 items.");
     }
-    const annotations = payload.annotations.map(normalizeAnnotation);
+    const annotations = payload.annotations.map((annotation, index) => (
+      normalizeAnnotation(annotation, index, actorId, timestamp)
+    ));
     next.annotations[versionId] = annotations;
     await appendEvent(next, "annotations_replaced", {
       version_id: versionId,
@@ -464,27 +647,109 @@ export async function applyCaseCommand(record, command, context = {}) {
   }
 
   if (type === "provenance") {
+    const versionId = payload.version_id
+      ? requiredId(payload.version_id, VERSION_ID_PATTERN, "version_id")
+      : next.versions.at(-1)?.version_id;
+    const targetVersion = next.versions.find(item => item.version_id === versionId);
+    if (!targetVersion) {
+      throw new CaseStoreError(404, "version_not_found", "Version not found.");
+    }
     const channel = boundedText(payload.channel, "channel", 120, { required: true });
     const capturedAt = boundedText(payload.captured_at, "captured_at", 64);
     if (capturedAt && Number.isNaN(Date.parse(capturedAt))) {
       throw new CaseStoreError(400, "invalid_field", "captured_at is invalid.");
     }
-    next.declared_provenance = {
-      status: "declared_unverified",
+    const relationship = String(payload.relationship || "received_from");
+    if (!PROVENANCE_RELATIONSHIPS.has(relationship)) {
+      throw new CaseStoreError(400, "invalid_field", "relationship is invalid.");
+    }
+    const sourceDigest = String(payload.source_media_sha256 || "").toLowerCase();
+    if (sourceDigest && !SHA256_PATTERN.test(sourceDigest)) {
+      throw new CaseStoreError(400, "invalid_field", "source_media_sha256 is invalid.");
+    }
+    const verificationStatus = sourceDigest === targetVersion.media_sha256
+      ? "digest_verified"
+      : "declared_unverified";
+    const sourceNode = {
+      node_id: randomId("sg_src"),
+      kind: "declared_source",
       channel,
       source_url: safeUrl(payload.source_url),
       captured_at: capturedAt ? new Date(capturedAt).toISOString() : "",
       note: boundedText(payload.note, "note", 1000),
+      source_media_sha256: sourceDigest,
       actor_id: actorId,
       recorded_at: timestamp,
+    };
+    const edge = {
+      edge_id: randomId("sg_edge"),
+      source_node_id: sourceNode.node_id,
+      target_node_id: `media:${versionId}`,
+      target_version_id: versionId,
+      relationship,
+      verification_status: verificationStatus,
+      evidence_basis: verificationStatus === "digest_verified"
+        ? "exact_sha256_match"
+        : "reviewer_declaration",
+      actor_id: actorId,
+      recorded_at: timestamp,
+    };
+    next.provenance_graph.nodes.push(sourceNode);
+    next.provenance_graph.edges.push(edge);
+    next.declared_provenance = {
+      status: verificationStatus,
+      ...sourceNode,
+      relationship,
+      target_version_id: versionId,
     };
     await appendEvent(
       next,
       "provenance_declared",
-      next.declared_provenance,
+      { source_node: sourceNode, edge },
       actorId,
       timestamp,
     );
+    return next;
+  }
+
+  if (type === "workflow") {
+    const priority = payload.priority
+      ? String(payload.priority)
+      : next.workflow.priority;
+    if (!WORKFLOW_PRIORITIES.has(priority)) {
+      throw new CaseStoreError(400, "invalid_field", "priority is invalid.");
+    }
+    const assignee = payload.assignee === undefined
+      ? next.workflow.assignee
+      : boundedText(payload.assignee, "assignee", 120);
+    const priorityChanged = priority !== next.workflow.priority;
+    next.workflow.priority = priority;
+    next.workflow.assignee = assignee;
+    if (priorityChanged) {
+      next.workflow.sla_due_at = slaDueAt(timestamp, priority);
+      for (const task of next.workflow.tasks) {
+        if (task.status === "open") {
+          task.due_at = next.workflow.sla_due_at;
+        }
+      }
+    }
+    await appendEvent(next, "workflow_updated", {
+      priority: next.workflow.priority,
+      assignee: next.workflow.assignee,
+      sla_due_at: next.workflow.sla_due_at,
+    }, actorId, timestamp);
+    return next;
+  }
+
+  if (type === "comment") {
+    const comment = {
+      comment_id: randomId("sg_comment"),
+      body: boundedText(payload.body, "body", 2000, { required: true }),
+      actor_id: actorId,
+      recorded_at: timestamp,
+    };
+    next.comments.push(comment);
+    await appendEvent(next, "comment_added", comment, actorId, timestamp);
     return next;
   }
 
@@ -629,7 +894,9 @@ export function buildMetrics(cases) {
 
 
 function caseSummary(record) {
+  record = migrateCaseRecord(record);
   const latest = record.versions?.at(-1) || {};
+  const openTasks = (record.workflow?.tasks || []).filter(task => task.status === "open");
   return {
     case_id: record.case_id,
     title: record.title,
@@ -641,8 +908,40 @@ function caseSummary(record) {
     latest_machine_recommendation: latest.machine_recommendation || null,
     latest_risk_level: latest.risk_level || null,
     human_decision: record.human_decision,
+    workflow: {
+      priority: record.workflow.priority,
+      assignee: record.workflow.assignee,
+      sla_due_at: record.workflow.sla_due_at,
+      open_task_count: openTasks.length,
+      next_task: openTasks[0]?.type || null,
+    },
     chain_head: record.chain_head,
   };
+}
+
+
+export function sortCaseSummaries(records, now = new Date().toISOString()) {
+  const timestamp = Date.parse(now);
+  const priorityRank = { urgent: 0, high: 1, normal: 2, low: 3 };
+  return [...(records || [])].sort((left, right) => {
+    const leftClosed = CLOSED_STATUSES.has(left.status) ? 1 : 0;
+    const rightClosed = CLOSED_STATUSES.has(right.status) ? 1 : 0;
+    if (leftClosed !== rightClosed) {
+      return leftClosed - rightClosed;
+    }
+    const leftOverdue = !leftClosed && Date.parse(left.workflow?.sla_due_at || "") < timestamp ? 0 : 1;
+    const rightOverdue = !rightClosed && Date.parse(right.workflow?.sla_due_at || "") < timestamp ? 0 : 1;
+    if (leftOverdue !== rightOverdue) {
+      return leftOverdue - rightOverdue;
+    }
+    const priorityDifference = (priorityRank[left.workflow?.priority] ?? 9) - (
+      priorityRank[right.workflow?.priority] ?? 9
+    );
+    if (priorityDifference) {
+      return priorityDifference;
+    }
+    return String(right.updated_at || "").localeCompare(String(left.updated_at || ""));
+  });
 }
 
 
@@ -735,10 +1034,26 @@ export class ShareGuardCaseStore {
 
     if (request.method === "GET" && url.pathname === "/cases") {
       const stored = await this.state.storage.list({ prefix: "case:" });
-      const cases = [...stored.values()]
-        .map(caseSummary)
-        .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
-      return internalJson({ cases });
+      const statusFilter = String(url.searchParams.get("status") || "").trim();
+      const priorityFilter = String(url.searchParams.get("priority") || "").trim();
+      const requestedLimit = Number.parseInt(url.searchParams.get("limit") || "20", 10);
+      const limit = Number.isSafeInteger(requestedLimit)
+        ? Math.max(1, Math.min(100, requestedLimit))
+        : 20;
+      const requestedCursor = Number.parseInt(url.searchParams.get("cursor") || "0", 10);
+      const cursor = Number.isSafeInteger(requestedCursor) && requestedCursor >= 0
+        ? requestedCursor
+        : 0;
+      const ordered = sortCaseSummaries([...stored.values()].map(caseSummary));
+      const filtered = ordered.filter(record => (
+        (!statusFilter || record.status === statusFilter) &&
+        (!priorityFilter || record.workflow.priority === priorityFilter)
+      ));
+      const cases = filtered.slice(cursor, cursor + limit);
+      const nextCursor = cursor + cases.length < filtered.length
+        ? cursor + cases.length
+        : null;
+      return internalJson({ cases, next_cursor: nextCursor, total: filtered.length });
     }
 
     if (request.method === "GET" && url.pathname === "/metrics") {
@@ -754,7 +1069,7 @@ export class ShareGuardCaseStore {
         if (!record) {
           throw new CaseStoreError(404, "case_not_found", "Case not found.");
         }
-        return internalJson({ case: record });
+        return internalJson({ case: migrateCaseRecord(record) });
       }
       if (request.method === "DELETE" && segments.length === 2) {
         const record = await this.state.storage.get(key);
@@ -773,6 +1088,8 @@ export class ShareGuardCaseStore {
           annotations: "annotations",
           provenance: "provenance",
           feedback: "feedback",
+          workflow: "workflow",
+          comments: "comment",
           seal: "seal",
         }[segments[2]];
         if (!commandType) {

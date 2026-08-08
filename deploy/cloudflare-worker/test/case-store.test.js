@@ -6,6 +6,8 @@ import {
   buildMetrics,
   canonicalJson,
   createCase,
+  migrateCaseRecord,
+  sortCaseSummaries,
   verifyEventChain,
 } from "../src/case-store.js";
 
@@ -66,7 +68,41 @@ test("a case starts with a hash-linked creation and analysis trail", async () =>
   assert.equal(record.events[0].sequence, 1);
   assert.equal(record.events[0].previous_hash, "0".repeat(64));
   assert.equal(record.events[1].previous_hash, record.events[0].event_hash);
+  assert.equal(record.status, "awaiting_review");
+  assert.equal(record.workflow.priority, "high");
+  assert.equal(record.workflow.tasks.length, 1);
+  assert.equal(record.workflow.tasks[0].type, "review_media");
+  assert.equal(record.workflow.tasks[0].status, "open");
+  assert.equal(record.provenance_graph.nodes[0].kind, "media_version");
+  assert.equal(record.provenance_graph.nodes[0].version_id, VERSION_ID);
   assert.equal(await verifyEventChain(record.events), true);
+});
+
+
+test("legacy open cases migrate to a deterministic triage workflow", async () => {
+  const legacy = await createCase(analysis(), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+  legacy.schema = "shareguard.case.v2";
+  legacy.status = "open";
+  delete legacy.workflow;
+  delete legacy.comments;
+  delete legacy.review_grants;
+  delete legacy.provenance_graph;
+
+  const migrated = migrateCaseRecord(legacy);
+
+  assert.equal(migrated.schema, "shareguard.case.v3");
+  assert.equal(migrated.status, "awaiting_review");
+  assert.equal(migrated.workflow.priority, "high");
+  assert.equal(migrated.workflow.tasks[0].type, "review_media");
+  assert.equal(migrated.provenance_graph.nodes[0].media_sha256, "d".repeat(64));
+  assert.deepEqual(migrated.comments, []);
+  assert.deepEqual(migrated.review_grants, []);
+  assert.equal(await verifyEventChain(migrated.events), true);
 });
 
 
@@ -99,6 +135,15 @@ test("a reasoned human decision is server-attributed and append only", async () 
   });
   assert.equal(initial.human_decision, null);
   assert.equal(decided.events.length, 3);
+  assert.equal(decided.status, "held");
+  assert.equal(
+    decided.workflow.tasks.find(item => item.type === "review_media").status,
+    "completed",
+  );
+  assert.equal(
+    decided.workflow.tasks.find(item => item.type === "hold_resolution").status,
+    "open",
+  );
   assert.equal(await verifyEventChain(decided.events), true);
 
   await assert.rejects(
@@ -108,6 +153,46 @@ test("a reasoned human decision is server-attributed and append only", async () 
     }, { actorId: ACTOR_ID }),
     /reason_code/,
   );
+});
+
+
+test("workflow commands assign cases, change priority, and preserve an audit trail", async () => {
+  const initial = await createCase(analysis({ risk_level: "medium" }), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+  const updated = await applyCaseCommand(initial, {
+    type: "workflow",
+    payload: {
+      priority: "urgent",
+      assignee: "Night editor",
+    },
+  }, {
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:10:00.000Z",
+  });
+
+  assert.equal(updated.workflow.priority, "urgent");
+  assert.equal(updated.workflow.assignee, "Night editor");
+  assert.equal(updated.workflow.sla_due_at, "2026-08-08T04:25:00.000Z");
+  assert.equal(updated.events.at(-1).event_type, "workflow_updated");
+  assert.equal(await verifyEventChain(updated.events), true);
+});
+
+
+test("triage summaries place urgent and overdue cases first", () => {
+  const records = [
+    { case_id: "normal", status: "awaiting_review", updated_at: "2026-08-08T04:20:00Z", workflow: { priority: "normal", sla_due_at: "2026-08-08T10:00:00Z" } },
+    { case_id: "sealed", status: "sealed", updated_at: "2026-08-08T04:30:00Z", workflow: { priority: "urgent", sla_due_at: "2026-08-08T04:00:00Z" } },
+    { case_id: "urgent", status: "awaiting_review", updated_at: "2026-08-08T04:00:00Z", workflow: { priority: "urgent", sla_due_at: "2026-08-08T05:00:00Z" } },
+    { case_id: "overdue", status: "awaiting_source", updated_at: "2026-08-08T03:00:00Z", workflow: { priority: "high", sla_due_at: "2026-08-08T03:30:00Z" } },
+  ];
+
+  const ordered = sortCaseSummaries(records, "2026-08-08T04:30:00.000Z");
+
+  assert.deepEqual(ordered.map(item => item.case_id), ["overdue", "urgent", "normal", "sealed"]);
 });
 
 
@@ -134,6 +219,7 @@ test("reviewer annotations are normalized and cannot masquerade as model output"
   }, { actorId: ACTOR_ID });
 
   assert.equal(annotated.annotations[VERSION_ID][0].origin, "human_reviewer");
+  assert.equal(annotated.annotations[VERSION_ID][0].actor_id, ACTOR_ID);
   assert.equal(await verifyEventChain(annotated.events), true);
 
   await assert.rejects(
@@ -153,6 +239,53 @@ test("reviewer annotations are normalized and cannot masquerade as model output"
     }, { actorId: ACTOR_ID }),
     /bounds/,
   );
+});
+
+
+test("provenance creates explicit graph nodes and never upgrades an unsupported claim", async () => {
+  const initial = await createCase(analysis(), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+  const declared = await applyCaseCommand(initial, {
+    type: "provenance",
+    payload: {
+      version_id: VERSION_ID,
+      relationship: "received_from",
+      channel: "Reporter camera card",
+      source_url: "https://example.test/source",
+      captured_at: "2026-08-08T03:30:00.000Z",
+      note: "Declared during intake.",
+      verification_status: "verified",
+    },
+  }, { actorId: ACTOR_ID, now: "2026-08-08T04:02:00.000Z" });
+
+  assert.equal(declared.provenance_graph.nodes.length, 2);
+  assert.equal(declared.provenance_graph.edges.length, 1);
+  assert.equal(declared.provenance_graph.edges[0].relationship, "received_from");
+  assert.equal(declared.provenance_graph.edges[0].verification_status, "declared_unverified");
+  assert.equal(declared.provenance_graph.edges[0].target_version_id, VERSION_ID);
+  assert.equal(await verifyEventChain(declared.events), true);
+});
+
+
+test("comments are attributed and appended to the evidence chain", async () => {
+  const initial = await createCase(analysis(), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    actorId: ACTOR_ID,
+  });
+  const commented = await applyCaseCommand(initial, {
+    type: "comment",
+    payload: { body: "Please obtain the camera original." },
+  }, { actorId: ACTOR_ID, now: "2026-08-08T04:03:00.000Z" });
+
+  assert.equal(commented.comments.length, 1);
+  assert.equal(commented.comments[0].body, "Please obtain the camera original.");
+  assert.equal(commented.comments[0].actor_id, ACTOR_ID);
+  assert.equal(commented.events.at(-1).event_type, "comment_added");
 });
 
 

@@ -16,7 +16,7 @@ const STATIC_ROUTES = new Map([
   ["/v1/cases", { kind: "case_store", methods: new Set(["GET"]) }],
   ["/v1/metrics", { kind: "case_store", methods: new Set(["GET"]) }],
 ]);
-const CASE_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})(?:\/(decision|annotations|provenance|feedback|seal))?$/;
+const CASE_ROUTE = /^\/v1\/cases\/(sg_case_[0-9a-f]{32})(?:\/(decision|annotations|provenance|feedback|workflow|comments|seal))?$/;
 
 const EDGE_CLIENT_ID_HEADER = "X-ShareGuard-Client-Id";
 const LEGACY_EDGE_SECRET_HEADER = "X-ShareGuard-Edge-Secret";
@@ -383,7 +383,9 @@ async function callCaseStore(
 
 async function proxyCaseStore(request, env, actorId, origin) {
   const requestUrl = new URL(request.url);
-  const internalPath = requestUrl.pathname.replace(/^\/v1/, "") || "/";
+  const internalPath = (
+    (requestUrl.pathname.replace(/^\/v1/, "") || "/") + requestUrl.search
+  );
   let payload = null;
   if (request.method === "POST") {
     const contentLength = Number.parseInt(
