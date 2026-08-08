@@ -369,11 +369,17 @@ class PlatformHttpTests(unittest.TestCase):
         )
 
         self.assertEqual(status, 200)
-        self.assertIn(payload["decision"], {"allow", "review", "hold"})
-        self.assertIn("ai_probability", payload)
+        self.assertIn(payload["decision"], {"allow", "review"})
+        self.assertIn("model_score", payload)
+        self.assertNotIn("ai_probability", payload)
+        self.assertIn("media_sha256", payload)
+        self.assertFalse(payload["policy"]["machine_decision_is_final"])
         self.assertIn("report", payload)
         self.assertNotIn("raw", payload)
-        self.assertEqual(payload["backend"], "screening-model-api")
+        self.assertEqual(
+            payload["backend"],
+            "shareguard-protected-screening-engine",
+        )
 
     def test_legacy_analyze_uses_same_service_and_marks_deprecation(self):
         status, payload, headers = self.request(
@@ -387,7 +393,10 @@ class PlatformHttpTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("probability_ai_generated", payload)
-        self.assertEqual(payload["backend"], "screening-model-api")
+        self.assertEqual(
+            payload["backend"],
+            "shareguard-protected-screening-engine",
+        )
         self.assertEqual(headers.get("Deprecation"), "true")
         self.assertEqual(headers.get("X-ShareGuard-Demo"), "true")
 

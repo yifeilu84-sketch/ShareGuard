@@ -62,20 +62,21 @@ class ModalDeploymentTests(unittest.TestCase):
         self.assertIn('"SHAREGUARD_RATE_LIMIT_PER_MINUTE": "0"', text)
         self.assertIn('"SHAREGUARD_DAILY_QUOTA": "0"', text)
 
-    def test_modal_adapter_forces_production_spai_hybrid(self):
+    def test_modal_adapter_uses_temporary_screening_engine_without_private_shadow(self):
         text = self.modal_source()
 
         for setting in [
             '"SHAREGUARD_MODE": "production"',
-            '"SHAREGUARD_BACKEND": "spai-hybrid"',
+            '"SHAREGUARD_BACKEND": "spai"',
             '"SHAREGUARD_DEVICE": "cuda"',
             '"SPAI_CHECKPOINT": SPAI_CHECKPOINT',
             '"SPAI_SOURCE_DIR": SPAI_SOURCE_DIR',
             '"SPAI_CONFIG": SPAI_CONFIG',
-            '"SHAREGUARD_SHADOW_SAMPLE_RATE": "0.25"',
-            '"BUNDLE": MODEL_ARCHIVE',
+            '"SHAREGUARD_SHADOW_SAMPLE_RATE": "0"',
+            '"SHAREGUARD_MODEL_VERSION": "shareguard-screening-2026.08"',
         ]:
             self.assertIn(setting, text)
+        self.assertNotIn('"BUNDLE": MODEL_ARCHIVE', text)
         self.assertIn("SPAI_CHECKPOINT_SHA256", text)
         self.assertIn("SPAI_SOURCE_REVISION", text)
         self.assertNotIn(

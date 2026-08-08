@@ -11,6 +11,7 @@ class PlatformConfigTests(unittest.TestCase):
         self.assertEqual(config.max_upload_bytes, 10 * 1024 * 1024)
         self.assertEqual(config.max_image_pixels, 25_000_000)
         self.assertEqual(config.max_http_workers, 16)
+        self.assertEqual(config.model_version, "shareguard-screening-2026.08")
         self.assertFalse(config.is_origin_allowed("https://example.com"))
 
     def test_allowed_origins_require_exact_match(self):

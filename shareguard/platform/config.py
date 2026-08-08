@@ -57,7 +57,7 @@ class PlatformConfig:
     max_http_workers: int = 16
     bundle_sha256: Optional[str] = None
     spai_checkpoint_sha256: Optional[str] = None
-    model_version: str = "shareguard-private-v1"
+    model_version: str = "shareguard-screening-2026.08"
     include_propagation_views: bool = False
     public_score_decimals: int = 2
     rate_limit_per_minute: int = 0
@@ -108,7 +108,7 @@ class PlatformConfig:
             spai_checkpoint_sha256=env.get("SPAI_CHECKPOINT_SHA256") or None,
             model_version=env.get(
                 "SHAREGUARD_MODEL_VERSION",
-                "shareguard-private-v1",
+                "shareguard-screening-2026.08",
             ),
             include_propagation_views=_boolean(
                 env,

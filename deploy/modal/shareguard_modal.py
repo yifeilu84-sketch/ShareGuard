@@ -13,7 +13,6 @@ if modal.is_local():
 else:
     ROOT = Path("/app")
 PORT = 7860
-MODEL_ARCHIVE = "/models/shareguard-noisyshare-fusion-v1-safe.tar.gz"
 SPAI_CHECKPOINT = "/models/spai-public-v1-b1b1422f.safetensors"
 SPAI_CHECKPOINT_SHA256 = "ac5caaa6457172c53e36acdf665051ff292d2c3906b3911c51ed5db6844c2f87"
 SPAI_SOURCE_DIR = "/opt/spai"
@@ -61,10 +60,10 @@ IMAGE = (
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONUNBUFFERED": "1",
             "SHAREGUARD_MODE": "production",
-            "SHAREGUARD_BACKEND": "spai-hybrid",
+            "SHAREGUARD_BACKEND": "spai",
             "SHAREGUARD_HOST": "0.0.0.0",
             "SHAREGUARD_DEVICE": "cuda",
-            "SHAREGUARD_MODEL_VERSION": "spai-public-v1",
+            "SHAREGUARD_MODEL_VERSION": "shareguard-screening-2026.08",
             "SHAREGUARD_ALLOWED_ORIGINS": "https://shareguard.systems",
             "SHAREGUARD_RATE_LIMIT_PER_MINUTE": "0",
             "SHAREGUARD_DAILY_QUOTA": "0",
@@ -75,7 +74,7 @@ IMAGE = (
             "SHAREGUARD_MAX_INFERENCE_CONCURRENCY": "1",
             "SHAREGUARD_MAX_WAITING_REQUESTS": "8",
             "SHAREGUARD_MAX_HTTP_WORKERS": "16",
-            "SHAREGUARD_SHADOW_SAMPLE_RATE": "0.25",
+            "SHAREGUARD_SHADOW_SAMPLE_RATE": "0",
             "SPAI_CHECKPOINT": SPAI_CHECKPOINT,
             "SPAI_CHECKPOINT_SHA256": SPAI_CHECKPOINT_SHA256,
             "SPAI_SOURCE_DIR": SPAI_SOURCE_DIR,
@@ -83,7 +82,6 @@ IMAGE = (
             "SPAI_SOURCE_REVISION": SPAI_SOURCE_REVISION,
             "SPAI_MAX_DIMENSION": "2048",
             "PYTHONPATH": f"{SPAI_SOURCE_DIR}:/app",
-            "BUNDLE": MODEL_ARCHIVE,
             "PORT": str(PORT),
         }
     )

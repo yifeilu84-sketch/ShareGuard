@@ -1,6 +1,7 @@
 """Product-facing boundary for authenticated image screening."""
 
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
 from threading import BoundedSemaphore
 from time import perf_counter
@@ -13,9 +14,10 @@ from .product import build_authenticity_report, make_propagation_views
 
 
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
-PUBLIC_BACKEND_NAME = "screening-model-api"
+PUBLIC_BACKEND_NAME = "shareguard-protected-screening-engine"
+PUBLIC_DECISION_LAYER = "shareguard-editorial-policy-v2"
 DISCLAIMER = "本结果为技术辅助，不替代司法鉴定或最终法律结论。"
-SCORE_NOTICE = "模型分数未经概率校准，不代表图像为AI生成的事实概率。"
+SCORE_NOTICE = "模型分数未经概率校准，是筛查信号，不是图像由AI生成的事实概率。"
 
 
 class AnalysisError(Exception):
@@ -61,9 +63,9 @@ class DecisionPolicy:
         if isinstance(raw, Mapping) and raw.get("selective_review") is True:
             return Decision(
                 value="review",
-                label="空间一致性不足，需人工复核",
+                label="局部信号不一致，需人工复核",
                 recommended_action=(
-                    "空间复核发现整图与局部信号不一致，系统不会自动暂缓或放行；"
+                    "空间与局部复核发现整图与区域信号不一致，系统不会自动暂缓或放行；"
                     "请核验原始文件、来源与拍摄上下文。"
                 ),
                 uncertainty="high",
@@ -78,9 +80,12 @@ class DecisionPolicy:
             )
         if risk_level == "high":
             return Decision(
-                value="hold",
-                label="建议暂缓发布",
-                recommended_action="建议暂缓公开使用，进入人工复核或进一步取证流程。",
+                value="review",
+                label="高风险，需人工复核",
+                recommended_action=(
+                    "筛查信号较高，建议在人工复核完成前暂缓公开使用；"
+                    "机器建议不构成最终处置决定。"
+                ),
                 uncertainty=uncertainty,
             )
         if risk_level == "medium" or (risk_level == "low" and label == "ai_generated"):
@@ -154,6 +159,7 @@ class AnalysisService:
                 image,
                 image_format,
                 safe_name,
+                hashlib.sha256(image_bytes).hexdigest(),
                 request_id,
                 started,
             )
@@ -165,6 +171,7 @@ class AnalysisService:
         image: Image.Image,
         image_format: str,
         safe_name: str,
+        media_sha256: str,
         request_id: str,
         started: float,
     ) -> AnalysisOutcome:
@@ -177,8 +184,6 @@ class AnalysisService:
 
         model_version = self.config.model_version
         raw = result.get("raw")
-        if isinstance(raw, Mapping) and raw.get("model_version"):
-            model_version = str(raw["model_version"])
         reliability = _public_reliability(raw)
         engine_metadata = _public_engine_metadata(raw, model_version)
 
@@ -230,14 +235,27 @@ class AnalysisService:
             "platform": "ShareGuard",
             "backend": PUBLIC_BACKEND_NAME,
             "model_version": model_version,
+            "engine_release": model_version,
+            "media_sha256": media_sha256,
             **engine_metadata,
             "decision": decision.value,
+            "machine_recommendation": decision.value,
             "decision_label": decision.label,
             "risk_level": safe_result["risk_level"],
             "model_score": safe_result["probability_ai_generated"],
             "score_kind": "uncalibrated_ai_generation_score",
             "decision_margin": safe_result["confidence"],
             "score_notice": SCORE_NOTICE,
+            "calibration": {
+                "status": "unavailable",
+                "calibrated_probability": None,
+                "reason": "validated_calibration_artifact_not_configured",
+            },
+            "policy": {
+                "version": PUBLIC_DECISION_LAYER,
+                "machine_decision_is_final": False,
+                "human_decision_required_for_hold": True,
+            },
             "reliability": reliability,
             "localization": {
                 "available": False,
@@ -249,7 +267,6 @@ class AnalysisService:
                 "hops": [],
                 "reason": "source_data_not_provided",
             },
-            "ai_probability": safe_result["probability_ai_generated"],
             "confidence": safe_result["confidence"],
             "uncertainty": decision.uncertainty,
             "recommended_action": decision.recommended_action,
@@ -263,8 +280,11 @@ class AnalysisService:
         legacy_payload = {
             **safe_result,
             "request_id": request_id,
+            "engine_release": model_version,
+            "media_sha256": media_sha256,
             "report": report,
             "decision": decision.value,
+            "machine_recommendation": decision.value,
             "decision_label": decision.label,
             "uncertainty": decision.uncertainty,
             "recommended_action": decision.recommended_action,
@@ -272,6 +292,16 @@ class AnalysisService:
             "score_kind": "uncalibrated_ai_generation_score",
             "decision_margin": safe_result["confidence"],
             "score_notice": SCORE_NOTICE,
+            "calibration": {
+                "status": "unavailable",
+                "calibrated_probability": None,
+                "reason": "validated_calibration_artifact_not_configured",
+            },
+            "policy": {
+                "version": PUBLIC_DECISION_LAYER,
+                "machine_decision_is_final": False,
+                "human_decision_required_for_hold": True,
+            },
             "reliability": reliability,
             "localization": {
                 "available": False,
@@ -365,24 +395,13 @@ def _public_reliability(raw: Any) -> Dict[str, Any]:
 
 
 def _public_engine_metadata(raw: Any, model_version: str) -> Dict[str, Any]:
-    source = raw if isinstance(raw, Mapping) else {}
-    shadow = source.get("shadow_evaluation")
-    shadow_source = shadow if isinstance(shadow, Mapping) else {}
-    status = str(shadow_source.get("status", "disabled"))
-    if status not in {"agree", "disagree", "unavailable", "not_sampled", "disabled"}:
-        status = "unavailable"
     return {
-        "detector_engine": str(source.get("detector_engine") or model_version),
-        "engine_role": str(source.get("engine_role") or "primary"),
-        "decision_layer": str(
-            source.get("decision_layer") or "shareguard-dossier-v1"
-        ),
+        "detector_engine": PUBLIC_BACKEND_NAME,
+        "engine_role": "screening",
+        "decision_layer": PUBLIC_DECISION_LAYER,
         "shadow_evaluation": {
-            "performed": shadow_source.get("performed") is True,
-            "status": status,
-            "engine": str(
-                shadow_source.get("engine") or "shareguard-private-v1"
-            ),
+            "performed": False,
+            "status": "not_exposed",
             "affects_decision": False,
         },
     }
