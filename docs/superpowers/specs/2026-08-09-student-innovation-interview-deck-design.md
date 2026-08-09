@@ -5,14 +5,16 @@
 
 ## Objective
 
-Build a ten-minute presentation that makes three points unmistakable:
+Build a ten-minute presentation that makes four points unmistakable:
 
-1. Images entering real publication workflows have already been compressed,
-   resized, captured, captioned, and repeatedly forwarded.
-2. ShareGuard retains stronger detection performance across those transmission
-   conditions than representative single-detector baselines.
-3. ShareGuard converts detection into a complete institutional action: screen,
-   decide, preserve, and independently verify.
+1. A single public event quickly produces many compressed, resized, captured,
+   captioned, and repeatedly forwarded image versions.
+2. ShareGuard gives end users an event-consultation case where those versions
+   are examined together, compared, decided, and preserved.
+3. The latest event-scenario-specialized model leads the evaluated public
+   baselines across every held-out transmission operation.
+4. ShareGuard turns model evidence into an executable case outcome: screen,
+   compare, decide, seal, and independently verify.
 
 The presentation is designed for innovation-award judges. Practical meaning is
 the narrative spine; technical evidence proves the claim rather than replacing
@@ -49,85 +51,99 @@ frozen-proof direction. All remaining slides use the decision-dossier direction.
 
 | Time | Slide | Core assertion |
 | --- | --- | --- |
-| 00:00–00:40 | 1. Opening | 一张被反复传播的影像，可以在核验完成前进入公共舆论。 |
-| 00:40–01:25 | 2. Real gap | 真正的检测难题发生在压缩、缩放、截图、加字和转发之后。 |
-| 01:25–02:10 | 3. ShareGuard | ShareGuard在发布前完成传播后检测、处置和证据锁定。 |
-| 02:10–03:05 | 4. Technical advantage | 语义、结构、频域三类证据与双尺度十检查点共同抵抗传播失真。 |
-| 03:05–03:55 | 5. Propagation image set | 同一事件图经过五种传播状态，仍由同一冻结规则处理。 |
-| 03:55–04:35 | 6. Robustness evidence | ShareGuard在9/10条件领先SPAI，退化均值提高6.25 pp。 |
-| 04:35–05:10 | 7. External confirmation | 5,000张untouched图像一次性确认跨来源与跨生成器能力。 |
-| 05:10–07:20 | 8. Live demonstration | 导入、追加版本、处置、签封、验证在正式网站连续完成。 |
-| 07:20–08:20 | 9. From score to action | 普通检测器输出分数；ShareGuard形成可执行、可追溯的发布案卷。 |
-| 08:20–09:20 | 10. Practical meaning | 编辑部、平台和公共机构获得更早的拦截、更快的协作与完整的责任证据。 |
+| 00:00–00:40 | 1. Opening | 同一事件在数分钟内分裂成原图、截图、加字图和多次转发版本。 |
+| 00:40–01:25 | 2. Real gap | 常规AI逐图给分；真实用户面对的是一整个事件的传播版本洪流。 |
+| 01:25–02:10 | 3. Event consultation | 用户围绕一个事件建立会诊案卷，连续提交、比较并处置相关版本。 |
+| 02:10–03:05 | 4. Technical advantage | 事件情景特化训练与语义、结构、频域证据共同抵抗九种传播失真。 |
+| 03:05–03:50 | 5. Propagation image set | 同一事件图经过九类传播操作，模型持续保持可用判别力。 |
+| 03:50–04:40 | 6. Robustness evidence | ShareGuard在全部传播条件领先SPAI、AIDE、UnivFD和FatFormer等参评基线。 |
+| 04:40–05:15 | 7. External confirmation | 5,000张untouched图像给出跨来源、跨生成器、四基线配对证据。 |
+| 05:15–07:20 | 8. Live demonstration | 创建会诊、导入多版本、查看证据、形成处置、签封和验证连续完成。 |
+| 07:20–08:20 | 9. From image score to event case | ShareGuard把多张传播图组织成一个可执行、可追溯的事件结论。 |
+| 08:20–09:20 | 10. Practical meaning | C端用户在一次会诊中识别高风险版本、形成行动并保全完整证据。 |
 | 09:20–10:00 | 11. Close | 让高风险影像止步于发布前，让每一次公共传播都有证据可查。 |
 
-Four hidden backup slides cover the full architecture, ten-condition table,
-paired statistics, and protected deployment boundary.
+Four hidden backup slides cover the full architecture, nine-operation table,
+multi-baseline paired statistics, and protected deployment boundary.
 
 ## Technical Advantage Slide
 
 The comparison is explicit and operational:
 
-| Dimension | Typical image detector | ShareGuard |
+| Dimension | Typical AI image detector | ShareGuard |
 | --- | --- | --- |
-| Input assumption | Clean or lightly processed image | Ten real transmission conditions |
+| Work unit | One uploaded image | One event case with multiple propagated versions |
+| Scenario | Clean or lightly processed image | Nine held-out transmission operations |
 | Evidence | One dominant representation | Semantic + structural + 28-D frequency evidence |
-| Stability | One model instance | CLIP-B/CLIP-L, five seeds each, frozen fusion |
-| Validation | Aggregate benchmark score | Frozen threshold, paired testing, untouched holdout |
-| Output | Image-level score | Risk, workflow action, encrypted custody, signed evidence |
+| Robustness design | Generic image-level training | Event-scenario specialization with source and operation holdout |
+| Stability | One model instance | CLIP-B/CLIP-L evidence, multi-seed frozen decision system |
+| Validation | Aggregate benchmark score | Frozen thresholds, paired testing, untouched holdout |
+| Output | Image-level score | Version risk, event action, encrypted custody, signed evidence |
 
-Visible proof points:
+Visible proof points use two clearly separated frozen protocols:
 
-- 0.8399 NoisyShareBench balanced accuracy;
-- 0.9199 NoisyShareBench AUC;
-- 0.7750 ten-condition mean, +6.25 pp over SPAI;
-- 9 of 10 transmission conditions ahead of SPAI;
-- JPEG Q10 +19.14 pp and share-heavy +12.97 pp over SPAI;
-- 5,000-image untouched confirmation: 0.8008 bAcc, 0.9077 AUC,
-  0.9017 AP, 93.36% generated-image recall.
+- latest propagation matrix: 0.9287 balanced accuracy, 0.9801 macro AUC,
+  and 0.8976 balanced accuracy on the weakest held-out operation;
+- all nine held-out transmission operations lead the evaluated public-baseline
+  field, including SPAI, AIDE, UnivFD, and FatFormer;
+- source identities and transmission operations are both held out during the
+  cross-fit evaluation;
+- 5,000-image untouched confirmation of the research lineage: pooled balanced-
+  accuracy gains of +20.04 pp over SPAI, +16.76 pp over AIDE, +29.28 pp over
+  UnivFD, and +21.78 pp over FatFormer;
+- thresholds are frozen before test access and paired uncertainty is reported.
+
+The main slide does not mix the propagation-matrix scores with the untouched
+generator-subset scores. Detailed condition values remain in a backup slide.
 
 ## Practical Meaning Slide
 
-Each audience receives one concrete change:
+The main beneficiary is the end user conducting an event consultation:
 
-- **Newsroom:** suspicious media reaches a structured review desk before
-  publication; original-material requests and decisions stay in one case.
-- **Content platform:** propagated versions, assignments, escalation, and audit
-  events share one workflow and one evidence format.
-- **Public institution:** media hash, decision record, signature, and portable
-  `.sgd` package support independent verification and later review.
+- **Journalist or fact-checker:** submits the original, screenshots, captioned
+  copies, and forwarded variants into one event case.
+- **Public communicator or creator:** finds the highest-risk version, records a
+  distribution decision, and requests stronger source material in one flow.
+- **Community moderator or concerned user:** exports a signed `.sgd` case that
+  preserves media hashes, model evidence, decisions, and verification records.
 
 The central visible sentence is:
 
-> 普通AI检测停在一个分数；ShareGuard把分数变成发布行动。
+> 常规AI逐图给分；ShareGuard完成整场事件的影像会诊。
 
 ## Live Demonstration
 
-Use one prepared synthetic event image and one deterministic transmission
-variant that have both been tested before the interview. The demonstration
-sequence is:
+Use one prepared synthetic event image and at least two deterministic
+transmission variants that have all been tested before the interview. The
+demonstration sequence is:
 
-1. import the event image;
-2. show the returned image-level score and recommendation;
-3. append the propagated version and compare the two uploaded files;
-4. record a structured human disposition;
-5. seal the case into `.sgd`;
-6. open the verifier and show integrity success.
+1. create an event-consultation case;
+2. import the first event image and show its live model result;
+3. append a screenshot-like and a repeatedly forwarded version;
+4. compare version-level risks and evidence in the same case;
+5. record the event disposition and action;
+6. seal the case into `.sgd`;
+7. open the verifier and show integrity success.
 
 The main demonstration slide also contains four static fallback frames, so the
 story remains continuous if the network or inference service is slow.
 
 ## Propagation-Robustness Image Set
 
-Deliver six 16:9 or 4:3 high-resolution images based on one fictional breaking
-event scene:
+Deliver ten 16:9 or 4:3 high-resolution images based on one fictional breaking
+event scene: one source image plus the nine held-out sharing operations used by
+the latest evaluation.
 
 1. source-quality image;
-2. JPEG Q10 recompression;
-3. 256-pixel downscale and re-upload;
-4. screenshot-like capture with browser or phone UI boundary;
-5. share-heavy multi-generation compression;
-6. meme-like news caption composition.
+2. JPEG Q75 recompression;
+3. JPEG Q50 recompression;
+4. JPEG Q30 recompression;
+5. JPEG Q10 recompression;
+6. 384-pixel downscale and re-upload;
+7. 256-pixel downscale and re-upload;
+8. share-heavy multi-generation compression;
+9. screenshot-like capture with browser or phone UI boundary;
+10. meme-like news caption composition.
 
 Every image keeps the same underlying event content. Labels state the applied
 transmission operation and avoid implying that the image is an authentic news
@@ -138,7 +154,7 @@ record.
 - editable `.pptx` with speaker notes for every slide;
 - PDF presentation fallback;
 - rendered slide montage and individual slide previews;
-- six propagation-robustness demonstration images;
+- ten propagation-robustness demonstration images;
 - a one-page timing script with the live-demo click sequence;
 - four hidden judge-question backup slides.
 
@@ -147,6 +163,8 @@ record.
 - total spoken script fits 9:30–10:00 at a natural Mandarin pace;
 - no slide contains more than one principal assertion;
 - all benchmark numbers match the frozen project record;
+- the nine-operation research result and the untouched public-baseline result
+  are labeled as separate protocols;
 - every slide is rendered and inspected for overflow, overlap, stretching, and
   unreadable labels;
 - propagation images preserve aspect ratio and underlying event identity;
