@@ -384,7 +384,7 @@ function renderPersistentCase(record) {
   renderCustodyLog();
   dom.custodyDecision.textContent = record.human_decision
     ? humanDecisionLabel(record.human_decision.action).toUpperCase()
-    : "HUMAN DECISION PENDING";
+    : "OPERATOR CONFIRMATION PENDING";
   dom.custodySeal.textContent = deletionPending
     ? "DELETE PENDING"
     : record.status === "sealed"
@@ -393,8 +393,8 @@ function renderPersistentCase(record) {
   dom.forceReleaseButton.disabled = locked;
   dom.feedbackButton.disabled = locked;
   dom.forceReleaseButton.textContent = record.human_decision
-    ? `更新人工决定 · ${humanDecisionLabel(record.human_decision.action)}`
-    : "记录人工决定";
+    ? `更新处置确认 · ${humanDecisionLabel(record.human_decision.action)}`
+    : "确认系统处置";
   dom.feedbackButton.textContent = record.feedback
     ? `更新结果反馈 · ${feedbackOutcomeLabel(record.feedback.outcome)}`
     : "补录结果反馈";
@@ -682,7 +682,7 @@ function renderAnalysisUnavailable(message) {
   dom.machineNarrative.textContent = message;
   dom.evidenceList.innerHTML = "";
   dom.forceReleaseButton.disabled = true;
-  dom.forceReleaseButton.textContent = "记录人工决定";
+  dom.forceReleaseButton.textContent = "确认系统处置";
   dom.feedbackButton.disabled = true;
   dom.feedbackButton.textContent = "补录结果反馈";
   dom.caseDeleteButton.disabled = !state.activeCaseRecord;
@@ -739,7 +739,7 @@ function normalizePayload(payload) {
   const decisionMargin = clamp(marginValue, 0, 1);
   const riskLevel = String(payload.risk_level || "uncertain");
   const report = payload.report && typeof payload.report === "object" ? payload.report : {};
-  const scoreNotice = String(payload.score_notice || report.score_notice || "模型分数未经概率校准，不代表图像为AI生成的事实概率。");
+  const scoreNotice = String(payload.score_notice || report.score_notice || "");
   const currentView = state.currentDataUrl
     ? [{ id: "current", label: t("view.uploaded", "上传原图"), data_url: state.currentDataUrl, size: "SOURCE", filter: "none", origin: "uploaded", observed: true }]
     : [];
@@ -758,13 +758,14 @@ function normalizePayload(payload) {
   const detectorEngine = String(payload.detector_engine || payload.model_version || "unknown");
   const decisionLayer = String(payload.decision_layer || "shareguard-dossier-v1");
   const shadowEvaluation = normalizeShadowEvaluation(payload.shadow_evaluation);
-  const summary = String(report.summary || payload.recommended_action || "模型已返回图像级判定。");
-  const recommendedAction = String(report.recommended_action || payload.recommended_action || "请结合来源信息进行人工复核。");
-  const notes = Array.isArray(report.notes)
-    ? report.notes
-    : Array.isArray(report.review_notes)
-      ? report.review_notes
-      : [scoreNotice, "当前模型未返回像素级定位。", "当前请求未提供可信传播链路数据。"];
+  const summary = modelDecisionSummary(decision);
+  const recommendedAction = systemActionLabel(decision);
+  const notes = [
+    `模型判定：${modelVerdictLabel(decision)}`,
+    `判定强度：${decisionStrengthLabel(decisionMargin)}`,
+    `边界状态：${localizeBoundaryState(payload.uncertainty || report.uncertainty, reliability)}`,
+    `系统动作：${recommendedAction}`
+  ];
   return {
     backend: String(payload.backend || ""),
     case_id: String(payload.case_id || ""),
@@ -785,8 +786,6 @@ function normalizePayload(payload) {
     score_kind: String(payload.score_kind || "uncalibrated_ai_generation_score"),
     decision_margin: decisionMargin,
     score_notice: scoreNotice,
-    probability_ai_generated: modelScore,
-    confidence: decisionMargin,
     risk_level: riskLevel,
     decision,
     uncertainty: String(payload.uncertainty || report.uncertainty || "unknown"),
@@ -796,12 +795,12 @@ function normalizePayload(payload) {
     localization,
     provenance,
     report: {
-      conclusion: String(report.conclusion || decisionLabel(decision)),
+      conclusion: modelVerdictLabel(decision),
       summary,
       recommended_action: recommendedAction,
       sections: Array.isArray(report.sections) ? report.sections : [],
       notes: notes.map(String),
-      disclaimer: String(report.disclaimer || "该结果为技术辅助风险信号，不替代司法鉴定或来源调查。")
+      disclaimer: ""
     },
     propagation_views: currentView
   };
@@ -870,20 +869,20 @@ function normalizePersistedAnnotation(annotation, index) {
 
 function renderDecision(payload) {
   const verdicts = {
-    hold: [t("decision.hold.en", "SUSPEND"), t("decision.hold.local", "暂缓发布")],
-    review: [t("decision.review.en", "REVIEW"), t("decision.review.local", "人工复核")],
+    hold: [t("decision.hold.en", "SUSPEND"), t("decision.hold.local", "暂停分发")],
+    review: [t("decision.review.en", "REVIEW"), t("decision.review.local", "进入复核")],
     allow: [t("decision.allow.en", "RELEASE"), t("decision.allow.local", "允许使用")]
   };
   const [english, chinese] = verdicts[payload.decision] || verdicts.review;
   dom.decisionPanel.dataset.decision = payload.decision;
   dom.decisionTitle.innerHTML = `${escapeHtml(english)}<br><em>${escapeHtml(chinese)}</em>`;
   restartCssAnimation(dom.decisionTitle, "stamp-enter");
-  dom.riskProbability.textContent = formatModelScore(payload.model_score);
-  dom.riskProbability.title = payload.score_notice;
-  dom.confidenceValue.textContent = formatModelScore(payload.decision_margin);
-  dom.confidenceValue.title = t("decision.marginHelp", "决策余量表示模型输出与决策边界的相对距离，不是准确率或事实置信度。");
+  dom.riskProbability.textContent = modelVerdictLabel(payload.decision);
+  dom.riskProbability.removeAttribute("title");
+  dom.confidenceValue.textContent = decisionStrengthLabel(payload.decision_margin);
+  dom.confidenceValue.removeAttribute("title");
   dom.uncertaintyValue.textContent = localizeBoundaryState(payload.uncertainty, payload.reliability);
-  dom.recommendedAction.textContent = payload.report.recommended_action;
+  dom.recommendedAction.textContent = systemActionLabel(payload.decision);
   typeWriterEffect(dom.machineNarrative, payload.report.summary);
   dom.evidenceList.innerHTML = payload.report.notes.slice(0, 4).map((note) => `<li>${escapeHtml(note)}</li>`).join("");
   restartCssAnimation(dom.evidenceList, "evidence-list-decoding");
@@ -979,7 +978,7 @@ function renderProvenance() {
   if (!provenance.available || !provenance.nodes.length) {
     dom.provenanceStatus.textContent = "NO SOURCE DATA";
     dom.provenanceBody.className = "capability-empty";
-    dom.provenanceBody.textContent = t("provenance.unavailable", "未提供来源或传播链路数据，系统不会生成虚构拓扑。");
+    dom.provenanceBody.textContent = t("provenance.unavailable", "尚未记录来源或传播链路。");
     return;
   }
   const nodes = new Map(provenance.nodes.map((node) => [node.node_id, node]));
@@ -1060,7 +1059,7 @@ function renderViews(payload) {
   const versionButtons = persistedVersions.map((version, index) => `
     <button class="evidence-version" type="button" data-version-id="${escapeHtml(version.version_id)}" aria-pressed="${version.version_id === state.selectedVersionId}">
       <span>V${String(index + 1).padStart(2, "0")}</span>
-      <span><strong>${escapeHtml(versionRoleLabel(version.role))}</strong><small>${escapeHtml(formatModelScore(version.model_score))} / ${escapeHtml(version.media_custody?.status === "encrypted_private" ? "PRIVATE" : "DIGEST ONLY")}</small></span>
+      <span><strong>${escapeHtml(versionRoleLabel(version.role))}</strong><small>${escapeHtml(modelVerdictLabel(version.machine_recommendation))} / ${escapeHtml(version.media_custody?.status === "encrypted_private" ? "PRIVATE" : "DIGEST ONLY")}</small></span>
     </button>`).join("");
   dom.viewGrid.innerHTML = versionButtons
     ? versionButtons
@@ -1462,9 +1461,9 @@ async function submitHumanDecision(event) {
     renderPersistentCase(payload.case);
     if (state.activePayload) state.activePayload.case = payload.case;
     dom.decisionDialog.close();
-    showToast("人工决定已成为案宗正式处置记录。");
+    showToast("处置确认已写入证据链，可以签封导出。");
   } catch (error) {
-    showApiError(error, "人工决定保存失败。");
+    showApiError(error, "处置确认保存失败。");
   }
 }
 
@@ -1868,12 +1867,12 @@ function reportText(bundle) {
     `案件状态：${bundle.status}`,
     `媒体 SHA-256：${version.media_sha256 || "—"}`,
     `引擎版本：${version.engine_release || "—"}`,
-    `机器建议：${humanDecisionLabel(version.machine_recommendation)}`,
-    `人工决定：${humanDecisionLabel(bundle.human_decision?.action)}`,
-    `AI生成模型分数：${formatModelScore(version.model_score)}`,
-    `分数语义：${version.score_kind || "—"}`,
-    `事件链：${bundle.event_count} EVENTS / ${bundle.chain_head}`,
-    "说明：机器分数未经概率校准，仅作为风险筛查信号；人工决定为正式处置记录。"
+    `模型判定：${modelVerdictLabel(version.machine_recommendation)}`,
+    `判定强度：${decisionStrengthLabel(version.decision_margin)}`,
+    `边界状态：${localizeBoundaryState(version.report?.uncertainty, version.reliability)}`,
+    `系统动作：${systemActionLabel(version.machine_recommendation)}`,
+    `处置确认：${humanDecisionLabel(bundle.human_decision?.action)}`,
+    `事件链：${bundle.event_count} EVENTS / ${bundle.chain_head}`
   ].join("\n");
 }
 
@@ -1884,10 +1883,10 @@ function buildReportHtml(bundle) {
 <html lang="${escapeHtml(i18n?.getLocale() || "zh-CN")}"><head><meta charset="utf-8"><title>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</title>
 <style>body{margin:40px;color:#1a1a1a;background:#f7f5f0;font-family:Arial,sans-serif;line-height:1.55}header,section{padding:18px 0;border-bottom:1px solid #1a1a1a}h1,h2{font-family:Georgia,serif}small,dt{font-family:monospace}dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 28px}dt{font-size:11px;color:#666}dd{margin:3px 0;overflow-wrap:anywhere}.risk{color:#d32f2f}@media print{body{background:#fff;margin:20mm}}</style></head>
 <body><header><small>CASE #${escapeHtml(bundle.case_id)}</small><h1>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</h1><p>${escapeHtml(bundle.title)}</p></header>
-<section><h2 class="risk">${escapeHtml(humanDecisionLabel(bundle.human_decision?.action))}</h2><dl><div><dt>MACHINE RECOMMENDATION</dt><dd>${escapeHtml(humanDecisionLabel(version.machine_recommendation))}</dd></div><div><dt>MODEL SCORE</dt><dd>${escapeHtml(formatModelScore(version.model_score))}</dd></div><div><dt>ENGINE RELEASE</dt><dd>${escapeHtml(version.engine_release || "—")}</dd></div><div><dt>SCORE KIND</dt><dd>${escapeHtml(version.score_kind || "—")}</dd></div></dl></section>
+<section><h2 class="risk">${escapeHtml(systemActionLabel(version.machine_recommendation))}</h2><dl><div><dt>模型判定</dt><dd>${escapeHtml(modelVerdictLabel(version.machine_recommendation))}</dd></div><div><dt>判定强度</dt><dd>${escapeHtml(decisionStrengthLabel(version.decision_margin))}</dd></div><div><dt>边界状态</dt><dd>${escapeHtml(localizeBoundaryState(version.report?.uncertainty, version.reliability))}</dd></div><div><dt>处置确认</dt><dd>${escapeHtml(humanDecisionLabel(bundle.human_decision?.action))}</dd></div><div><dt>引擎版本</dt><dd>${escapeHtml(version.engine_release || "—")}</dd></div><div><dt>系统动作</dt><dd>${escapeHtml(systemActionLabel(version.machine_recommendation))}</dd></div></dl></section>
 <section><h2>证据标识</h2><dl><div><dt>MEDIA SHA-256</dt><dd>${escapeHtml(version.media_sha256 || "—")}</dd></div><div><dt>CHAIN HEAD</dt><dd>${escapeHtml(bundle.chain_head)}</dd></div><div><dt>EVENTS</dt><dd>${escapeHtml(bundle.event_count)}</dd></div><div><dt>TRUST STATE</dt><dd>${escapeHtml(bundle.trust.signature_state)}</dd></div></dl></section>
 <section><h2>来源声明</h2><p>${provenance ? `${escapeHtml(provenance.channel)} / DECLARED UNVERIFIED / ${escapeHtml(provenance.source_url || "NO URL")}` : "未记录来源声明"}</p></section>
-  <section><small>机器分数未经概率校准，仅作为风险筛查信号；人工决定为正式处置记录。授权媒体在限定保留期内经应用层 AES-256-GCM 加密托管；导出的 .sgd v3 会明确记录嵌入或摘要分离状态。</small></section></body></html>`;
+  <section><small>本报告记录模型判定、系统动作、处置确认与完整事件链。授权媒体在限定保留期内经应用层 AES-256-GCM 加密托管；导出的 .sgd v3 会记录媒体、报告、处置与签名清单。</small></section></body></html>`;
 }
 
 function saveHtmlReport() {
@@ -2098,8 +2097,21 @@ async function revokeReviewGrant(grantId) {
   }
 }
 
+function openDecisionConfirmation() {
+  const record = state.activeCaseRecord;
+  if (!record || caseMutationLocked(record)) return;
+  const decision = state.activePayload?.decision
+    || selectedVersion()?.machine_recommendation
+    || "review";
+  const existing = record.human_decision;
+  dom.humanDecisionAction.value = existing?.action || operatorActionForDecision(decision);
+  dom.humanDecisionReason.value = existing?.reason_code || "model_signal";
+  dom.humanDecisionNote.value = existing?.note || operatorConfirmationNote(decision);
+  dom.decisionDialog.showModal();
+}
+
 function bindDialogControls() {
-  dom.forceReleaseButton.addEventListener("click", () => dom.decisionDialog.showModal());
+  dom.forceReleaseButton.addEventListener("click", openDecisionConfirmation);
   dom.feedbackButton.addEventListener("click", () => dom.feedbackDialog.showModal());
   dom.closeDecisionButton.addEventListener("click", () => dom.decisionDialog.close());
   dom.closeFeedbackButton.addEventListener("click", () => dom.feedbackDialog.close());
@@ -2265,7 +2277,7 @@ function renderModelConnectionState() {
     dom.engineLabel.textContent = t("engine.unavailable", "云端推理连接失败，未生成鉴真结论");
   } else {
     engineIndicator?.classList.add("caution");
-    dom.engineLabel.textContent = t("engine.awaiting", "等待云端推理授权，凭证不会写入仓库");
+    dom.engineLabel.textContent = t("engine.awaiting", "等待云端推理授权；凭证仅保存在当前页面内存");
   }
 }
 
@@ -2431,12 +2443,58 @@ function sanitizeFilename(name) {
   return String(name || "image").replace(/\\/g, "/").split("/").pop().replace(/[^\w.\-\u4e00-\u9fff]/g, "_").slice(0, 120) || "image";
 }
 
+function modelVerdictLabel(decision) {
+  return decision === "hold"
+    ? t("model.verdict.generated", "AI生成")
+    : decision === "allow"
+      ? t("model.verdict.camera", "真人拍摄")
+      : t("model.verdict.review", "需专项复核");
+}
+
+function decisionStrengthLabel(value) {
+  const margin = Number(value);
+  if (!Number.isFinite(margin)) return t("strength.unknown", "未提供");
+  if (margin >= 0.67) return t("strength.high", "高");
+  if (margin >= 0.3) return t("strength.medium", "中");
+  return t("strength.boundary", "边界");
+}
+
+function systemActionLabel(decision) {
+  return decision === "hold"
+    ? t("action.hold", "暂停分发并进入签封")
+    : decision === "allow"
+      ? t("action.allow", "允许使用并保存报告")
+      : t("action.review", "进入专项复核队列");
+}
+
+function modelDecisionSummary(decision) {
+  if (decision === "hold") {
+    return t("summary.hold", "ShareGuard判定该影像为AI生成内容，系统已暂停分发并建立签封任务。");
+  }
+  if (decision === "allow") {
+    return t("summary.allow", "ShareGuard判定该影像为真人拍摄内容，系统已允许使用并保存检测报告。");
+  }
+  return t("summary.review", "ShareGuard已将该影像置入专项复核队列，并锁定当前版本与证据记录。");
+}
+
+function operatorActionForDecision(decision) {
+  if (decision === "hold") return "hold";
+  if (decision === "allow") return "allow";
+  return "escalate";
+}
+
+function operatorConfirmationNote(decision) {
+  if (decision === "hold") return "确认系统已暂停该影像分发，并将模型判定与来源记录写入证据链。";
+  if (decision === "allow") return "确认系统已允许使用，并保留本次检测报告。";
+  return "确认该影像已进入专项复核队列。";
+}
+
 function decisionLabel(decision) {
   return decision === "hold"
-    ? t("decision.hold.local", "暂缓发布")
+    ? t("decision.hold.local", "暂停分发")
     : decision === "allow"
       ? t("decision.allow.local", "允许使用")
-      : t("decision.review.local", "人工复核");
+      : t("decision.review.local", "进入复核");
 }
 
 function localizeUncertainty(value) {
@@ -2475,11 +2533,6 @@ async function refreshLocalizedView() {
     if (state.activePayload) renderLiveEngineState(state.activePayload);
     else dom.engineLabel.textContent = t("engine.unavailable", "云端推理未连接，未生成鉴真结论");
   }
-}
-
-function formatModelScore(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? `${clamp(numeric, 0, 1).toFixed(3)} / 1.000` : "—";
 }
 
 function selectedVersion() {
@@ -2521,7 +2574,7 @@ function humanDecisionLabel(action) {
     request_original: "索取原件",
     escalate: "升级复核",
     hold: "暂缓发布"
-  })[String(action)] || "待人工决定";
+  })[String(action)] || "待处置确认";
 }
 
 function versionRoleLabel(role) {

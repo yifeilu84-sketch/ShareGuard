@@ -32,7 +32,7 @@ class_name = "ShareGuardRateLimiter"
 
 [[durable_objects.bindings]]
 name = "CASE_STORE"
-class_name = "ShareGuardCaseStore"
+class_name = "ShareGuardCaseStoreV2"
 
 [[durable_objects.bindings]]
 name = "STORAGE_QUOTA"
@@ -49,3 +49,7 @@ new_sqlite_classes = ["ShareGuardCaseStore"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["ShareGuardStorageQuota"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["ShareGuardCaseStoreV2"]

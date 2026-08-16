@@ -125,6 +125,27 @@ test("a case starts with a hash-linked creation and analysis trail", async () =>
 });
 
 
+test("an automated hold remains held before operator confirmation", async () => {
+  const record = await createCase(analysis({
+    machine_recommendation: "hold",
+    decision_label: "suspend",
+  }), {
+    caseId: CASE_ID,
+    versionId: VERSION_ID,
+    versionRole: "original",
+    title: "Generated image",
+    actorId: ACTOR_ID,
+    now: "2026-08-08T04:00:00.000Z",
+  });
+
+  assert.equal(record.versions[0].machine_recommendation, "hold");
+  assert.equal(record.status, "held");
+  assert.equal(record.human_decision, null);
+  assert.equal(record.workflow.tasks[0].type, "confirm_system_action");
+  assert.equal(migrateCaseRecord(record).status, "held");
+});
+
+
 test("legacy open cases migrate to a deterministic triage workflow", async () => {
   const legacy = await createCase(analysis(), {
     caseId: CASE_ID,

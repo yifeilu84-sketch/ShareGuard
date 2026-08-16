@@ -176,8 +176,9 @@ class PlatformBackendTests(unittest.TestCase):
         self.assertIn("initializeProductionWorkbench", script)
         self.assertNotIn("loadSampleCase(DEFAULT_CASE_ID)", script)
         self.assertIn("LIVE MODEL RESULT", html)
-        self.assertIn("建议动作", html)
-        self.assertIn("AI生成模型分数", html)
+        self.assertIn("系统动作", html)
+        self.assertIn("模型判定", html)
+        self.assertIn("判定强度", html)
         self.assertIn("尚无结论", html)
         self.assertNotIn(">Demo Engine<", html)
 

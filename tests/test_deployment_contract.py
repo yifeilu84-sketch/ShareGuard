@@ -290,8 +290,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('class_name = "ShareGuardRateLimiter"', config)
         self.assertIn('new_sqlite_classes = ["ShareGuardRateLimiter"]', config)
         self.assertIn('name = "CASE_STORE"', config)
-        self.assertIn('class_name = "ShareGuardCaseStore"', config)
+        self.assertIn('class_name = "ShareGuardCaseStoreV2"', config)
         self.assertIn('new_sqlite_classes = ["ShareGuardCaseStore"]', config)
+        self.assertIn('new_sqlite_classes = ["ShareGuardCaseStoreV2"]', config)
         self.assertIn('name = "STORAGE_QUOTA"', config)
         self.assertIn('class_name = "ShareGuardStorageQuota"', config)
         self.assertIn('new_sqlite_classes = ["ShareGuardStorageQuota"]', config)
@@ -309,11 +310,15 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('name = "RATE_LIMITER"', preview_config)
         self.assertIn('class_name = "ShareGuardRateLimiter"', preview_config)
         self.assertIn('name = "CASE_STORE"', preview_config)
-        self.assertIn('class_name = "ShareGuardCaseStore"', preview_config)
+        self.assertIn('class_name = "ShareGuardCaseStoreV2"', preview_config)
         self.assertIn('name = "STORAGE_QUOTA"', preview_config)
         self.assertIn('class_name = "ShareGuardStorageQuota"', preview_config)
         self.assertIn(
             'new_sqlite_classes = ["ShareGuardCaseStore"]',
+            preview_config,
+        )
+        self.assertIn(
+            'new_sqlite_classes = ["ShareGuardCaseStoreV2"]',
             preview_config,
         )
         self.assertIn(

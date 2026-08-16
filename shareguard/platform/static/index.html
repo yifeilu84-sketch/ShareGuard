@@ -90,7 +90,7 @@
           <dl id="metricsSummary" class="operations-metrics" aria-label="真实运行指标">
             <div><dt>CASES</dt><dd id="metricCases">—</dd><small>持久案件</small></div>
             <div><dt>VERSIONS</dt><dd id="metricVersions">—</dd><small>已分析版本</small></div>
-            <div><dt>HUMAN GATE</dt><dd id="metricDecisions">—</dd><small>人工决定</small></div>
+            <div><dt>CONFIRMED</dt><dd id="metricDecisions">—</dd><small>处置确认</small></div>
             <div><dt>OVERRIDES</dt><dd id="metricOverrides">—</dd><small>人机差异</small></div>
             <div><dt>LATENCY</dt><dd id="metricLatency">—</dd><small>中位推理耗时</small></div>
             <div><dt>SHIFT</dt><dd id="metricShift">—</dd><small>分数分布信号</small></div>
@@ -111,7 +111,7 @@
         <aside id="quarantineZone" class="quarantine-zone" aria-labelledby="quarantineTitle">
           <header class="section-register compact">
             <div>
-              <span>QUARANTINE / HUMAN GATE</span>
+              <span>QUARANTINE / ACTION QUEUE</span>
               <h2 id="quarantineTitle" data-i18n="radar.quarantine">隔离挂起区</h2>
             </div>
           <output id="quarantineCount">00</output>
@@ -186,7 +186,7 @@
 
         <aside id="decisionPanel" class="decision-panel" aria-labelledby="decisionTitle">
           <header class="decision-register">
-            <span>EDITORIAL VERDICT / HUMAN AUTHORITY REQUIRED</span>
+            <span>MODEL VERDICT / AUTOMATED ACTION</span>
             <span id="decisionTimestamp">—</span>
           </header>
 
@@ -196,10 +196,10 @@
           </div>
 
           <dl class="risk-register">
-            <div><dt data-i18n="decision.score">AI生成模型分数</dt><dd id="riskProbability">—</dd></div>
-            <div><dt data-i18n="decision.margin">决策余量</dt><dd id="confidenceValue">—</dd></div>
+            <div><dt data-i18n="decision.score">模型判定</dt><dd id="riskProbability">—</dd></div>
+            <div><dt data-i18n="decision.margin">判定强度</dt><dd id="confidenceValue">—</dd></div>
             <div><dt data-i18n="decision.boundary">边界状态</dt><dd id="uncertaintyValue">—</dd></div>
-            <div><dt data-i18n="decision.action">建议动作</dt><dd id="recommendedAction">等待真实模型结果</dd></div>
+            <div><dt data-i18n="decision.action">系统动作</dt><dd id="recommendedAction">等待模型结论</dd></div>
           </dl>
 
           <section class="workflow-register owner-only" aria-labelledby="workflowTitle">
@@ -220,8 +220,8 @@
           </section>
 
           <section class="machine-testimony" aria-labelledby="testimonyTitle">
-            <h3 id="testimonyTitle" data-i18n="decision.testimony">机器证词</h3>
-            <p id="machineNarrative">尚未调用模型。正式站不会使用样例证词补全真实结果。</p>
+            <h3 id="testimonyTitle" data-i18n="decision.testimony">模型证据</h3>
+            <p id="machineNarrative">导入影像后生成模型判定与处置记录。</p>
             <ol id="evidenceList"></ol>
           </section>
 
@@ -230,7 +230,7 @@
               <h3 id="provenanceTitle" data-i18n="decision.provenance">溯源拓扑</h3>
               <span id="provenanceStatus">NO SOURCE DATA</span>
             </div>
-            <div id="provenanceBody" class="capability-empty">未提供来源或传播链路数据，系统不会生成虚构拓扑。</div>
+            <div id="provenanceBody" class="capability-empty">尚未记录来源或传播链路。</div>
             <form id="provenanceForm" class="provenance-form owner-only">
               <label for="provenanceTargetVersion"><span>关联版本</span><select id="provenanceTargetVersion" required></select></label>
               <label for="provenanceRelationship"><span>关系</span><select id="provenanceRelationship"><option value="received_from">接收自</option><option value="derived_from">衍生自</option><option value="captured_from">采集自</option><option value="published_at">发布于</option></select></label>
@@ -245,7 +245,7 @@
           </section>
 
           <div class="decision-actions owner-only">
-            <button id="forceReleaseButton" class="button secondary" type="button" disabled>记录人工决定</button>
+            <button id="forceReleaseButton" class="button secondary" type="button" disabled>确认系统处置</button>
             <button id="feedbackButton" class="button secondary" type="button" disabled>补录结果反馈</button>
             <button id="sealButton" class="button primary" type="button" data-i18n="decision.seal" disabled>签封并导出</button>
           </div>
@@ -257,7 +257,7 @@
             <button id="copyReportButton" type="button" data-i18n="report.copy">复制摘要</button>
           </div>
 
-          <p class="decision-disclaimer" data-i18n="decision.disclaimer">技术辅助结论，不替代司法鉴定。强制放行与签封行为将写入保全日志。</p>
+          <p class="decision-disclaimer" data-i18n="decision.disclaimer">模型判定、系统动作与处置确认将写入保全日志。</p>
         </aside>
       </section>
 
@@ -361,13 +361,13 @@
 
   <dialog id="decisionDialog" class="release-dialog" aria-labelledby="decisionFormTitle">
     <form id="decisionForm">
-      <span>STRUCTURED HUMAN DECISION</span>
-      <h2 id="decisionFormTitle">记录人工决定</h2>
-      <p>机器结果仅为建议。下列人工决定将成为案宗的正式处置记录。</p>
+      <span>OPERATOR CONFIRMATION</span>
+      <h2 id="decisionFormTitle">确认系统处置</h2>
+      <p>系统已根据模型结论执行当前动作。本次确认将把处置结果、责任人和说明写入证据链。</p>
       <label for="humanDecisionAction"><span>处置动作</span><select id="humanDecisionAction" required><option value="">请选择</option><option value="allow">允许使用</option><option value="request_original">索取原件</option><option value="escalate">升级复核</option><option value="hold">暂缓发布</option></select></label>
-      <label for="humanDecisionReason"><span>理由代码</span><select id="humanDecisionReason" required><option value="">请选择</option><option value="source_verified">来源已核实</option><option value="source_missing">来源材料缺失</option><option value="model_signal">模型信号需谨慎处置</option><option value="policy_risk">编辑或合规风险</option><option value="other">其他</option></select></label>
-      <label for="humanDecisionNote"><span>决定说明</span><textarea id="humanDecisionNote" rows="4" maxlength="1000"></textarea></label>
-      <div><button id="closeDecisionButton" type="button" class="button secondary">取消</button><button class="button primary" type="submit">写入证据链</button></div>
+      <label for="humanDecisionReason"><span>确认依据</span><select id="humanDecisionReason" required><option value="">请选择</option><option value="source_verified">来源已核实</option><option value="source_missing">来源材料缺失</option><option value="model_signal">模型结论已触发系统处置</option><option value="policy_risk">平台规则已触发</option><option value="other">其他</option></select></label>
+      <label for="humanDecisionNote"><span>确认说明</span><textarea id="humanDecisionNote" rows="4" maxlength="1000"></textarea></label>
+      <div><button id="closeDecisionButton" type="button" class="button secondary">取消</button><button class="button primary" type="submit">确认并写入证据链</button></div>
     </form>
   </dialog>
 

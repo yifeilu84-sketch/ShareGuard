@@ -1,4 +1,8 @@
-import { reviewGrantIsActive, ShareGuardCaseStore } from "./case-store.js";
+import {
+  reviewGrantIsActive,
+  ShareGuardCaseStore,
+  ShareGuardCaseStoreV2,
+} from "./case-store.js";
 import {
   assertSigningReady,
   publicTrustRoot,
@@ -13,7 +17,7 @@ import {
 import { issueReviewToken, verifyReviewToken } from "./review-access.js";
 import { ShareGuardStorageQuota } from "./storage-quota.js";
 
-export { ShareGuardCaseStore, ShareGuardStorageQuota };
+export { ShareGuardCaseStore, ShareGuardCaseStoreV2, ShareGuardStorageQuota };
 
 
 const STATIC_ROUTES = new Map([
@@ -1219,6 +1223,17 @@ async function persistAnalysis(request, mediaRequest, response, env, actorId, or
       origin,
       env,
     );
+  }
+
+  // Normalize incomplete adapters while preserving the three operational
+  // actions used by the workbench and persisted case record.
+  if (!new Set(["allow", "review", "hold"]).has(analysis.machine_recommendation)) {
+    const upstreamDecision = String(
+      analysis.machine_recommendation || analysis.decision || "",
+    ).trim().toLowerCase();
+    analysis.machine_recommendation = new Set(["allow", "review", "hold"]).has(upstreamDecision)
+      ? upstreamDecision
+      : "review";
   }
 
   const requestedCaseId = String(

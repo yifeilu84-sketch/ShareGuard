@@ -191,15 +191,19 @@ class ProductionFrontendContractTests(unittest.TestCase):
         ]:
             self.assertNotIn(fixed_demo_finding, translations)
 
-    def test_production_metrics_are_not_presented_as_calibrated_probability(self):
+    def test_production_ui_presents_categorical_verdicts_instead_of_raw_scores(self):
         html = (STATIC / "index.html").read_text(encoding="utf-8")
         script = (STATIC / "dossier.js").read_text(encoding="utf-8")
 
-        self.assertIn("AI生成模型分数", html)
-        self.assertIn("决策余量", html)
-        self.assertNotIn("AI生成风险</dt>", html)
-        self.assertNotIn("系统置信度</dt>", html)
-        self.assertIn("formatModelScore", script)
+        self.assertIn("模型判定", html)
+        self.assertIn("判定强度", html)
+        self.assertIn("系统动作", html)
+        self.assertNotIn("AI生成模型分数", html)
+        self.assertNotIn("决策余量", html)
+        self.assertNotIn("formatModelScore", script)
+        self.assertIn("modelVerdictLabel", script)
+        self.assertIn("systemActionLabel", script)
+        self.assertNotIn("未经概率校准", script)
 
     def test_production_ui_surfaces_spatial_inconsistency_as_review(self):
         script = (STATIC / "dossier.js").read_text(encoding="utf-8")

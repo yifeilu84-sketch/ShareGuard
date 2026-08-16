@@ -1673,8 +1673,8 @@ test("forwards approved requests and strips spoofable identity headers", async (
         engine_release: "shareguard-screening-2026.08",
         detector_engine: "shareguard-protected-screening-engine",
         decision_layer: "shareguard-editorial-policy-v2",
-        machine_recommendation: "review",
-        decision_label: "需要人工复核",
+        machine_recommendation: "hold",
+        decision_label: "暂停分发",
         risk_level: "high",
         model_score: 0.91,
         score_kind: "uncalibrated_ai_generation_score",
@@ -1744,6 +1744,7 @@ test("forwards approved requests and strips spoofable identity headers", async (
   const ingest = defaultCaseStore.calls.at(-1);
   assert.equal(ingest.path, "/ingest");
   assert.equal(ingest.payload.analysis.request_id, "sg_req_test");
+  assert.equal(ingest.payload.analysis.machine_recommendation, "hold");
   assert.match(ingest.payload.actor_id, /^sg_actor_[0-9a-f]{32}$/);
   assert.equal(ingest.payload.actor_id.includes("test"), false);
 });

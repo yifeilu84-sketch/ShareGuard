@@ -140,12 +140,18 @@ function mediaGraphNode(version) {
 function initialWorkflow(version, timestamp, actorId) {
   const priority = priorityFromRisk(version.risk_level);
   const dueAt = slaDueAt(timestamp, priority);
+  const taskType = version.machine_recommendation === "review"
+    ? "review_media"
+    : "confirm_system_action";
+  const taskTitle = version.machine_recommendation === "review"
+    ? "Review analyzed media"
+    : "Confirm automated disposition and seal evidence";
   return {
     priority,
     assignee: "",
     sla_due_at: dueAt,
-    tasks: [workflowTask("review_media", timestamp, actorId, {
-      title: "Review analyzed media",
+    tasks: [workflowTask(taskType, timestamp, actorId, {
+      title: taskTitle,
       dueAt,
     })],
   };
@@ -157,12 +163,19 @@ function legacyStatus(record) {
     return "sealed";
   }
   const action = record.human_decision?.action;
-  return {
+  const actionStatus = {
     allow: "closed_allowed",
     request_original: "awaiting_source",
     escalate: "escalated",
     hold: "held",
-  }[action] || "awaiting_review";
+  }[action];
+  if (actionStatus) return actionStatus;
+  const recommendation = record.versions?.at(-1)?.machine_recommendation;
+  return {
+    allow: "closed_allowed",
+    hold: "held",
+    review: "awaiting_review",
+  }[recommendation] || "awaiting_review";
 }
 
 
@@ -431,7 +444,7 @@ function sanitizeAnalysis(analysis) {
     32,
     { required: true },
   );
-  if (!new Set(["allow", "review"]).has(machineRecommendation)) {
+  if (!new Set(["allow", "review", "hold"]).has(machineRecommendation)) {
     throw new CaseStoreError(
       400,
       "invalid_analysis",
@@ -603,7 +616,11 @@ export async function createCase(analysis, context = {}) {
     schema: "shareguard.case.v3",
     case_id: caseId,
     title: boundedText(context.title || version.file_name, "title", 160, { required: true }),
-    status: "awaiting_review",
+    status: {
+      allow: "closed_allowed",
+      hold: "held",
+      review: "awaiting_review",
+    }[version.machine_recommendation] || "awaiting_review",
     created_at: timestamp,
     updated_at: timestamp,
     sealed_at: null,
@@ -752,9 +769,18 @@ export async function applyCaseCommand(record, command, context = {}) {
     next.versions.push(version);
     next.provenance_graph.nodes.push(mediaGraphNode(version));
     next.human_decision = null;
-    next.status = "awaiting_review";
-    next.workflow.tasks.push(workflowTask("review_media", timestamp, actorId, {
-      title: "Review newly added media version",
+    next.status = {
+      allow: "closed_allowed",
+      hold: "held",
+      review: "awaiting_review",
+    }[version.machine_recommendation] || "awaiting_review";
+    const taskType = version.machine_recommendation === "review"
+      ? "review_media"
+      : "confirm_system_action";
+    next.workflow.tasks.push(workflowTask(taskType, timestamp, actorId, {
+      title: version.machine_recommendation === "review"
+        ? "Review newly added media version"
+        : "Confirm automated disposition and seal evidence",
       dueAt: next.workflow.sla_due_at,
     }));
     await appendEvent(
@@ -1061,7 +1087,7 @@ function emptyCounts(keys) {
 
 export function buildMetrics(cases) {
   const records = Array.isArray(cases) ? cases : [];
-  const machine = emptyCounts(["allow", "review"]);
+  const machine = emptyCounts(["allow", "review", "hold"]);
   const human = emptyCounts([...HUMAN_ACTIONS]);
   const feedback = emptyCounts([...FEEDBACK_OUTCOMES]);
   const latencies = [];
@@ -1612,3 +1638,8 @@ export class ShareGuardCaseStore {
     throw new CaseStoreError(404, "not_found", "Route not found.");
   }
 }
+
+
+// A fresh class name provisions a new namespace while retaining the legacy
+// ShareGuardCaseStore namespace for rollback and data recovery.
+export class ShareGuardCaseStoreV2 extends ShareGuardCaseStore {}
