@@ -1866,7 +1866,7 @@ function reportText(bundle) {
     `${t("report.title", "ShareGuard影像鉴真报告")} / CASE #${bundle.case_id}`,
     `案件状态：${bundle.status}`,
     `媒体 SHA-256：${version.media_sha256 || "—"}`,
-    `引擎版本：${version.engine_release || "—"}`,
+    "推理服务：ShareGuard Screening Gateway",
     `模型判定：${modelVerdictLabel(version.machine_recommendation)}`,
     `判定强度：${decisionStrengthLabel(version.decision_margin)}`,
     `边界状态：${localizeBoundaryState(version.report?.uncertainty, version.reliability)}`,
@@ -1879,14 +1879,22 @@ function reportText(bundle) {
 function buildReportHtml(bundle) {
   const version = bundle.versions.find((item) => item.version_id === bundle.selected_version_id) || bundle.versions.at(-1) || {};
   const provenance = bundle.declared_provenance;
+  const provenanceState = provenanceVerificationLabel(bundle);
   return `<!doctype html>
 <html lang="${escapeHtml(i18n?.getLocale() || "zh-CN")}"><head><meta charset="utf-8"><title>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</title>
 <style>body{margin:40px;color:#1a1a1a;background:#f7f5f0;font-family:Arial,sans-serif;line-height:1.55}header,section{padding:18px 0;border-bottom:1px solid #1a1a1a}h1,h2{font-family:Georgia,serif}small,dt{font-family:monospace}dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 28px}dt{font-size:11px;color:#666}dd{margin:3px 0;overflow-wrap:anywhere}.risk{color:#d32f2f}@media print{body{background:#fff;margin:20mm}}</style></head>
 <body><header><small>CASE #${escapeHtml(bundle.case_id)}</small><h1>${escapeHtml(t("report.title", "ShareGuard影像鉴真报告"))}</h1><p>${escapeHtml(bundle.title)}</p></header>
-<section><h2 class="risk">${escapeHtml(systemActionLabel(version.machine_recommendation))}</h2><dl><div><dt>模型判定</dt><dd>${escapeHtml(modelVerdictLabel(version.machine_recommendation))}</dd></div><div><dt>判定强度</dt><dd>${escapeHtml(decisionStrengthLabel(version.decision_margin))}</dd></div><div><dt>边界状态</dt><dd>${escapeHtml(localizeBoundaryState(version.report?.uncertainty, version.reliability))}</dd></div><div><dt>处置确认</dt><dd>${escapeHtml(humanDecisionLabel(bundle.human_decision?.action))}</dd></div><div><dt>引擎版本</dt><dd>${escapeHtml(version.engine_release || "—")}</dd></div><div><dt>系统动作</dt><dd>${escapeHtml(systemActionLabel(version.machine_recommendation))}</dd></div></dl></section>
+<section><h2 class="risk">${escapeHtml(systemActionLabel(version.machine_recommendation))}</h2><dl><div><dt>模型判定</dt><dd>${escapeHtml(modelVerdictLabel(version.machine_recommendation))}</dd></div><div><dt>判定强度</dt><dd>${escapeHtml(decisionStrengthLabel(version.decision_margin))}</dd></div><div><dt>边界状态</dt><dd>${escapeHtml(localizeBoundaryState(version.report?.uncertainty, version.reliability))}</dd></div><div><dt>处置确认</dt><dd>${escapeHtml(humanDecisionLabel(bundle.human_decision?.action))}</dd></div><div><dt>推理服务</dt><dd>ShareGuard Screening Gateway</dd></div><div><dt>系统动作</dt><dd>${escapeHtml(systemActionLabel(version.machine_recommendation))}</dd></div></dl></section>
 <section><h2>证据标识</h2><dl><div><dt>MEDIA SHA-256</dt><dd>${escapeHtml(version.media_sha256 || "—")}</dd></div><div><dt>CHAIN HEAD</dt><dd>${escapeHtml(bundle.chain_head)}</dd></div><div><dt>EVENTS</dt><dd>${escapeHtml(bundle.event_count)}</dd></div><div><dt>TRUST STATE</dt><dd>${escapeHtml(bundle.trust.signature_state)}</dd></div></dl></section>
-<section><h2>来源声明</h2><p>${provenance ? `${escapeHtml(provenance.channel)} / DECLARED UNVERIFIED / ${escapeHtml(provenance.source_url || "NO URL")}` : "未记录来源声明"}</p></section>
+<section><h2>来源记录</h2><p>${provenance ? `${escapeHtml(provenance.channel)} / ${escapeHtml(provenanceState)} / ${escapeHtml(provenance.source_url || "NO URL")}` : "未记录来源"}</p></section>
   <section><small>本报告记录模型判定、系统动作、处置确认与完整事件链。授权媒体在限定保留期内经应用层 AES-256-GCM 加密托管；导出的 .sgd v3 会记录媒体、报告、处置与签名清单。</small></section></body></html>`;
+}
+
+function provenanceVerificationLabel(bundle) {
+  const edges = Array.isArray(bundle?.provenance_graph?.edges) ? bundle.provenance_graph.edges : [];
+  return edges.some((edge) => edge.verification_status === "digest_verified")
+    ? "DIGEST VERIFIED"
+    : "SOURCE RECORDED";
 }
 
 function saveHtmlReport() {
