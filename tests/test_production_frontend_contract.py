@@ -234,6 +234,16 @@ class ProductionFrontendContractTests(unittest.TestCase):
             self.assertNotIn(outdated_claim, script)
             self.assertNotIn(outdated_claim, translations)
 
+    def test_provenance_relationship_options_match_case_store_contract(self):
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        script = (STATIC / "dossier.js").read_text(encoding="utf-8")
+
+        for relationship in ["original_source", "observed_from", "received_from", "reposted_from"]:
+            self.assertIn(f'value="{relationship}"', html)
+            self.assertIn(f"{relationship}:", script)
+        for unsupported_relationship in ["derived_from", "captured_from", "published_at"]:
+            self.assertNotIn(f'value="{unsupported_relationship}"', html)
+
     def test_offline_verifier_trusts_only_pinned_v3_issuer_keys(self):
         verifier = (STATIC / "verifier.js").read_text(encoding="utf-8")
         runtime = (STATIC / "runtime-config.js").read_text(encoding="utf-8")

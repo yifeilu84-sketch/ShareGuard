@@ -2606,10 +2606,10 @@ function shortVersionId(versionId) {
 
 function provenanceRelationshipLabel(relationship) {
   return ({
+    original_source: "原始来源",
+    observed_from: "发现于",
     received_from: "接收自",
-    derived_from: "衍生自",
-    captured_from: "采集自",
-    published_at: "发布于"
+    reposted_from: "转发自"
   })[String(relationship)] || String(relationship || "关联");
 }
 
